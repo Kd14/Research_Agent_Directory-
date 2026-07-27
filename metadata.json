@@ -1,0 +1,6 @@
+{
+  "name": "NexusAgent MCP Research Network",
+  "description": "Multi-agent research network orchestrated via an MCP server with real-time graph visualizer, document library, and human intervention controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
