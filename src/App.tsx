@@ -24,16 +24,39 @@ import { MCPToolsInspector } from './components/MCPToolsInspector';
 import { ReportViewer } from './components/ReportViewer';
 import { SamplePromptsGrid } from './components/SamplePromptsGrid';
 
-import { 
-  TechDocument, 
-  InstructionStep, 
-  AgentNode, 
-  MCPLogEntry, 
-  MCPTool, 
-  ResearchSession, 
+import {
+  TechDocument,
+  InstructionStep,
+  AgentNode,
+  MCPLogEntry,
+  MCPTool,
+  ResearchSession,
   DocumentCategory,
-  SystemStats 
+  SystemStats
 } from './types';
+
+// Domain-specific specialists the user can opt in/out of per run. 'lead' (orchestrator)
+// and 'synthesis' (final report writer) are always deployed regardless of this selection.
+const DOMAIN_SUB_AGENTS = [
+  {
+    id: 'literature',
+    name: 'Agent Hypatia',
+    title: 'Literature & Theory Researcher',
+    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80'
+  },
+  {
+    id: 'pipeline',
+    name: 'Agent Turing',
+    title: 'Model Pipeline & Compute Architect',
+    avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80'
+  },
+  {
+    id: 'validation',
+    name: 'Agent Veritas',
+    title: 'Fact-Checking & Logic Auditor',
+    avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80'
+  }
+];
 
 export default function App() {
   // Navigation & View Tabs
@@ -45,6 +68,21 @@ export default function App() {
 
   // MCP Tools State
   const [mcpTools, setMcpTools] = useState<MCPTool[]>([]);
+
+  // Sub-Agent Deployment Selection (domain specialists only; lead + synthesis always run)
+  const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>(
+    DOMAIN_SUB_AGENTS.map(a => a.id)
+  );
+
+  const toggleSubAgent = (id: string) => {
+    setSelectedAgentIds(prev => {
+      if (prev.includes(id)) {
+        if (prev.length === 1) return prev; // keep at least one domain specialist active
+        return prev.filter(a => a !== id);
+      }
+      return [...prev, id];
+    });
+  };
 
   // Prompt & Session State
   const [userPrompt, setUserPrompt] = useState<string>('');
@@ -58,6 +96,12 @@ export default function App() {
   const [currentStepIndex, setCurrentStepIndex] = useState<number>(0);
   const [agentOutputs, setAgentOutputs] = useState<Record<string, string>>({});
   const [activeToolCall, setActiveToolCall] = useState<{ toolName: string; agentId: string } | undefined>();
+
+  // Guards against re-entrant execution: `session` changes (agent status/log
+  // updates) fire mid-step, and without these the effect below would kick
+  // off duplicate concurrent runs of the same step/synthesis call.
+  const inFlightStepRef = useRef<number | null>(null);
+  const synthesisInFlightRef = useRef<boolean>(false);
 
   // System Stats
   const [stats, setStats] = useState<SystemStats>({
@@ -169,6 +213,8 @@ export default function App() {
     setAgentOutputs({});
     setCurrentStepIndex(0);
     setErrorMessage(null);
+    inFlightStepRef.current = null;
+    synthesisInFlightRef.current = false;
 
     try {
       const res = await fetch('/api/research/plan', {
@@ -176,7 +222,8 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userPrompt: targetPrompt,
-          docIds: selectedDocIds
+          docIds: selectedDocIds,
+          activeAgentIds: selectedAgentIds
         })
       });
       const data = await res.json();
@@ -203,19 +250,24 @@ export default function App() {
     const steps = session.instructionSet;
     if (currentStepIndex >= steps.length) {
       // All steps completed -> Synthesize Final Report
-      handleSynthesizeReport();
+      if (!synthesisInFlightRef.current) {
+        synthesisInFlightRef.current = true;
+        handleSynthesizeReport();
+      }
       return;
     }
 
-    const currentStep = steps[currentStepIndex];
+    if (inFlightStepRef.current === currentStepIndex) return;
     executeStep(currentStepIndex);
   }, [isExecuting, isPaused, currentStepIndex, session]);
 
   const executeStep = async (stepIdx: number, userFeedback?: string) => {
     if (!session) return;
+    if (inFlightStepRef.current === stepIdx) return;
     const currentStep = session.instructionSet[stepIdx];
     if (!currentStep) return;
 
+    inFlightStepRef.current = stepIdx;
     const agentId = currentStep.assignedAgentId;
 
     // Update agent state to 'analyzing'
@@ -316,6 +368,7 @@ export default function App() {
 
       // Delay slightly for smooth visual progression
       setTimeout(() => {
+        inFlightStepRef.current = null;
         if (!isPaused) {
           setCurrentStepIndex(prev => prev + 1);
         }
@@ -326,6 +379,7 @@ export default function App() {
       updateAgentState(agentId, { status: 'error' });
       setErrorMessage(err.message || 'Agent step execution failed');
       setIsPaused(true);
+      inFlightStepRef.current = null;
     }
   };
 
@@ -390,6 +444,7 @@ export default function App() {
       updateAgentState('synthesis', { status: 'error' });
       setErrorMessage(err.message || 'Report synthesis failed');
       setIsExecuting(false);
+      synthesisInFlightRef.current = false;
     }
   };
 
@@ -452,6 +507,8 @@ export default function App() {
     setAgentOutputs({});
     setUserPrompt('');
     setActiveTab('research');
+    inFlightStepRef.current = null;
+    synthesisInFlightRef.current = false;
   };
 
   return (
@@ -522,6 +579,41 @@ export default function App() {
                 </button>
               </div>
 
+              {/* Sub-Agent Deployment Selection */}
+              {!session && (
+                <div className="mb-4">
+                  <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                    Deploy Domain Specialists (Dr. Astra & Agent Nexus always run):
+                  </span>
+                  <div className="mt-1.5 flex flex-wrap gap-2">
+                    {DOMAIN_SUB_AGENTS.map(agent => {
+                      const isSelected = selectedAgentIds.includes(agent.id);
+                      return (
+                        <button
+                          key={agent.id}
+                          type="button"
+                          onClick={() => toggleSubAgent(agent.id)}
+                          title={agent.title}
+                          className={`flex items-center gap-2 rounded-full border px-2.5 py-1.5 text-left transition-all ${
+                            isSelected
+                              ? 'border-indigo-400 bg-indigo-50 dark:border-indigo-600 dark:bg-indigo-950/50'
+                              : 'border-slate-200 bg-slate-50 opacity-60 hover:opacity-100 dark:border-slate-800 dark:bg-slate-900'
+                          }`}
+                        >
+                          <img src={agent.avatar} alt={agent.name} className="h-5 w-5 rounded-full object-cover" />
+                          <span className="flex flex-col leading-tight">
+                            <span className={`text-[11px] font-semibold ${isSelected ? 'text-indigo-700 dark:text-indigo-300' : 'text-slate-500 dark:text-slate-400'}`}>
+                              {agent.name}
+                            </span>
+                            <span className="text-[9.5px] text-slate-400 dark:text-slate-500">{agent.title.split('&')[0].trim()}</span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {/* Error Banner */}
               {errorMessage && (
                 <div className="mb-4 flex items-start gap-2 rounded-xl border border-rose-300 bg-rose-50 p-3 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
@@ -579,6 +671,7 @@ export default function App() {
                   {/* Right: Process Logs Terminal */}
                   <ProcessLogsTerminal
                     logs={session.logs}
+                    agents={session.agents}
                     onClearLogs={() => setSession(prev => prev ? { ...prev, logs: [] } : null)}
                   />
 

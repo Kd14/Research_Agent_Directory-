@@ -45,9 +45,18 @@ export const InstructionSetEditor: React.FC<InstructionSetEditorProps> = ({
   const [interventionFeedback, setInterventionFeedback] = useState<string>('');
   const [activeInterventionStepId, setActiveInterventionStepId] = useState<string | null>(null);
 
+  // Only agents actually deployed in this session can be assigned steps.
+  const assignableAgentIds = ['literature', 'pipeline', 'validation', 'synthesis'].filter(id => agents[id]);
+  const agentShortLabel: Record<string, string> = {
+    literature: 'Literature',
+    pipeline: 'Pipeline Spec',
+    validation: 'Fact-Checker',
+    synthesis: 'Synthesis'
+  };
+
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
   const [newStepTitle, setNewStepTitle] = useState<string>('');
-  const [newStepAgent, setNewStepAgent] = useState<string>('literature');
+  const [newStepAgent, setNewStepAgent] = useState<string>(() => assignableAgentIds[0] || 'synthesis');
   const [newStepDirective, setNewStepDirective] = useState<string>('');
 
   const handleStartEdit = (step: InstructionStep) => {
@@ -299,10 +308,11 @@ export const InstructionSetEditor: React.FC<InstructionSetEditorProps> = ({
               onChange={(e) => setNewStepAgent(e.target.value)}
               className="rounded-lg border border-slate-300 p-2 text-xs dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
             >
-              <option value="literature">Agent Hypatia (Literature)</option>
-              <option value="pipeline">Agent Turing (Pipeline Spec)</option>
-              <option value="validation">Agent Veritas (Fact-Checker)</option>
-              <option value="synthesis">Agent Nexus (Synthesis)</option>
+              {assignableAgentIds.map(id => (
+                <option key={id} value={id}>
+                  {agents[id]?.name} ({agentShortLabel[id]})
+                </option>
+              ))}
             </select>
           </div>
           <textarea

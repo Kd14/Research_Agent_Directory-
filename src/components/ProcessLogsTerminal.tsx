@@ -1,34 +1,48 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { 
-  Terminal, 
-  Search, 
-  Filter, 
-  Trash2, 
-  Copy, 
-  Check, 
-  ChevronDown, 
-  ChevronRight, 
-  Zap, 
-  Bot, 
-  Server, 
-  User, 
-  Info, 
-  AlertTriangle 
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import {
+  Terminal,
+  Search,
+  Filter,
+  Trash2,
+  Copy,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Zap,
+  Bot,
+  Server,
+  User,
+  Info,
+  AlertTriangle,
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
-import { MCPLogEntry, LogLevel } from '../types';
+import { MCPLogEntry, LogLevel, AgentNode, AgentStatus } from '../types';
 
 interface ProcessLogsTerminalProps {
   logs: MCPLogEntry[];
   onClearLogs: () => void;
+  agents?: Record<string, AgentNode>;
+}
+
+interface AgentLogGroup {
+  key: string;
+  agentId?: string;
+  agentName: string;
+  logs: MCPLogEntry[];
+  lastLog: MCPLogEntry;
+  lastIndex: number;
 }
 
 export const ProcessLogsTerminal: React.FC<ProcessLogsTerminalProps> = ({
   logs,
-  onClearLogs
+  onClearLogs,
+  agents
 }) => {
   const [filterType, setFilterType] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
+  const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
   const [autoScroll, setAutoScroll] = useState<boolean>(true);
   const [copied, setCopied] = useState<boolean>(false);
 
@@ -42,13 +56,52 @@ export const ProcessLogsTerminal: React.FC<ProcessLogsTerminalProps> = ({
 
   const filteredLogs = logs.filter(log => {
     const matchesType = filterType === 'all' || log.type === filterType;
-    const matchesSearch = 
+    const matchesSearch =
       !searchQuery ||
       log.message.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (log.agentName && log.agentName.toLowerCase().includes(searchQuery.toLowerCase())) ||
       (log.toolName && log.toolName.toLowerCase().includes(searchQuery.toLowerCase()));
     return matchesType && matchesSearch;
   });
+
+  // Summarise the flat log stream into one card per agent: the latest
+  // message stands in for "what is this agent doing right now", with the
+  // full chronological history available behind an expand toggle.
+  const agentGroups = useMemo<AgentLogGroup[]>(() => {
+    const map = new Map<string, AgentLogGroup>();
+    filteredLogs.forEach((log, idx) => {
+      const key = log.agentId || log.agentName || 'system';
+      const name = log.agentName || 'System';
+      let group = map.get(key);
+      if (!group) {
+        group = { key, agentId: log.agentId, agentName: name, logs: [], lastLog: log, lastIndex: idx };
+        map.set(key, group);
+      }
+      group.logs.push(log);
+      group.lastLog = log;
+      group.lastIndex = idx;
+    });
+    // Most recently active agent bubbles to the top.
+    return Array.from(map.values()).sort((a, b) => b.lastIndex - a.lastIndex);
+  }, [filteredLogs]);
+
+  const toggleAgentExpanded = (key: string) => {
+    setExpandedAgents(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const allExpanded = agentGroups.length > 0 && agentGroups.every(g => expandedAgents.has(g.key));
+
+  const toggleExpandAll = () => {
+    setExpandedAgents(allExpanded ? new Set() : new Set(agentGroups.map(g => g.key)));
+  };
 
   const handleCopyLogs = () => {
     const text = logs.map(l => `[${l.timestamp}] [${l.type.toUpperCase()}] ${l.agentName || 'System'}: ${l.message}`).join('\n');
@@ -97,6 +150,49 @@ export const ProcessLogsTerminal: React.FC<ProcessLogsTerminalProps> = ({
     }
   };
 
+  const getAgentStatusBadge = (status?: AgentStatus) => {
+    switch (status) {
+      case 'analyzing':
+        return (
+          <span className="rounded-full bg-blue-500/20 px-2 py-0.5 text-[10px] font-medium text-blue-300 border border-blue-500/30">
+            Reasoning
+          </span>
+        );
+      case 'calling_tool':
+        return (
+          <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-medium text-amber-300 border border-amber-500/30 animate-pulse">
+            MCP Tool Call
+          </span>
+        );
+      case 'streaming':
+        return (
+          <span className="rounded-full bg-indigo-500/20 px-2 py-0.5 text-[10px] font-medium text-indigo-300 border border-indigo-500/30 animate-pulse">
+            Streaming
+          </span>
+        );
+      case 'completed':
+        return (
+          <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-medium text-emerald-300 border border-emerald-500/30">
+            Task Done
+          </span>
+        );
+      case 'error':
+        return (
+          <span className="rounded-full bg-rose-500/20 px-2 py-0.5 text-[10px] font-medium text-rose-300 border border-rose-500/30">
+            Error
+          </span>
+        );
+      case 'paused':
+        return (
+          <span className="rounded-full bg-slate-700/60 px-2 py-0.5 text-[10px] font-medium text-slate-300 border border-slate-600">
+            Paused
+          </span>
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
     <div className="flex flex-col rounded-2xl border border-slate-800 bg-slate-950 p-4 font-mono text-xs text-slate-200 shadow-xl">
       
@@ -138,6 +234,15 @@ export const ProcessLogsTerminal: React.FC<ProcessLogsTerminalProps> = ({
           </select>
 
           <button
+            onClick={toggleExpandAll}
+            disabled={agentGroups.length === 0}
+            className="flex items-center gap-1 rounded bg-slate-900 px-2 py-1 text-[10px] text-slate-300 hover:bg-slate-800 border border-slate-800 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {allExpanded ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+            <span>{allExpanded ? 'Collapse All' : 'Expand All'}</span>
+          </button>
+
+          <button
             onClick={handleCopyLogs}
             className="flex items-center gap-1 rounded bg-slate-900 px-2 py-1 text-[10px] text-slate-300 hover:bg-slate-800 border border-slate-800"
           >
@@ -155,74 +260,126 @@ export const ProcessLogsTerminal: React.FC<ProcessLogsTerminalProps> = ({
         </div>
       </div>
 
-      {/* Terminal Log Output Window */}
-      <div className="max-h-[380px] min-h-[220px] overflow-y-auto space-y-1.5 pr-2">
-        {filteredLogs.map((log) => {
-          const isExpanded = expandedLogId === log.id;
-          const hasDetails = log.details || log.args || log.result;
+      {/* Per-agent Activity Summary */}
+      <div className="max-h-[460px] min-h-[220px] overflow-y-auto space-y-1.5 pr-2">
+        {agentGroups.map((group) => {
+          const isGroupExpanded = expandedAgents.has(group.key);
+          const agentNode = group.agentId ? agents?.[group.agentId] : undefined;
 
           return (
-            <div 
-              key={log.id} 
-              className={`rounded-lg border p-2 transition-all ${
-                log.type === 'user_intervention'
-                  ? 'border-emerald-900/60 bg-emerald-950/20'
-                  : log.type === 'mcp_tool_call'
-                  ? 'border-amber-900/40 bg-amber-950/10'
-                  : 'border-slate-800/80 bg-slate-900/50 hover:bg-slate-900'
-              }`}
+            <div
+              key={group.key}
+              className="rounded-lg border border-slate-800/80 bg-slate-900/50 transition-all"
             >
-              <div 
-                className="flex items-start justify-between gap-2 cursor-pointer"
-                onClick={() => hasDetails && setExpandedLogId(isExpanded ? null : log.id)}
+              {/* Agent Summary Row: current activity at a glance */}
+              <div
+                className="flex items-start justify-between gap-2 cursor-pointer p-2.5 hover:bg-slate-900"
+                onClick={() => toggleAgentExpanded(group.key)}
               >
-                <div className="flex items-start gap-2">
-                  <span className="text-[10px] text-slate-500 font-mono shrink-0">
-                    {log.timestamp}
-                  </span>
+                <div className="flex items-start gap-2.5 min-w-0">
+                  {agentNode?.avatar ? (
+                    <img
+                      src={agentNode.avatar}
+                      alt={group.agentName}
+                      className="h-6 w-6 rounded-full object-cover border border-slate-700 shrink-0 mt-0.5"
+                    />
+                  ) : (
+                    <div className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-800 border border-slate-700 shrink-0 mt-0.5">
+                      <Bot className="h-3 w-3 text-slate-400" />
+                    </div>
+                  )}
 
-                  {getLogBadge(log)}
-
-                  <div className="flex flex-col">
-                    <span className="text-slate-200 leading-snug">
-                      {log.agentName && <strong className="text-indigo-400 font-normal mr-1">{log.agentName}:</strong>}
-                      {log.message}
+                  <div className="flex flex-col min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <strong className="text-slate-100 font-semibold not-italic">{group.agentName}</strong>
+                      {agentNode ? getAgentStatusBadge(agentNode.status) : getLogBadge(group.lastLog)}
+                      <span className="text-[10px] text-slate-500 font-mono">{group.lastLog.timestamp}</span>
+                      <span className="text-[10px] text-slate-600 font-mono">· {group.logs.length} event{group.logs.length === 1 ? '' : 's'}</span>
+                    </div>
+                    <span className="text-slate-300 leading-snug truncate">
+                      {group.lastLog.message}
                     </span>
                   </div>
                 </div>
 
-                {hasDetails && (
-                  <button className="text-slate-500 hover:text-slate-300 shrink-0">
-                    {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-                  </button>
-                )}
+                <button className="text-slate-500 hover:text-slate-300 shrink-0 mt-0.5">
+                  {isGroupExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                </button>
               </div>
 
-              {/* Expandable Details Box */}
-              {isExpanded && hasDetails && (
-                <div className="mt-2 rounded bg-slate-950 p-2 font-mono text-[10.5px] text-slate-300 space-y-1 border border-slate-800">
-                  {log.details && (
-                    <p className="text-slate-300 whitespace-pre-wrap">{log.details}</p>
-                  )}
-                  {log.args && (
-                    <div>
-                      <span className="text-amber-400 font-bold">Args:</span>
-                      <pre className="text-slate-400 overflow-x-auto">{JSON.stringify(log.args, null, 2)}</pre>
-                    </div>
-                  )}
-                  {log.result && (
-                    <div>
-                      <span className="text-emerald-400 font-bold">MCP Result:</span>
-                      <pre className="text-slate-400 overflow-x-auto">{JSON.stringify(log.result, null, 2)}</pre>
-                    </div>
-                  )}
+              {/* Full chronological log history for this agent */}
+              {isGroupExpanded && (
+                <div className="space-y-1.5 border-t border-slate-800/80 p-2">
+                  {group.logs.map((log) => {
+                    const isExpanded = expandedLogId === log.id;
+                    const hasDetails = log.details || log.args || log.result;
+
+                    return (
+                      <div
+                        key={log.id}
+                        className={`rounded-lg border p-2 transition-all ${
+                          log.type === 'user_intervention'
+                            ? 'border-emerald-900/60 bg-emerald-950/20'
+                            : log.type === 'mcp_tool_call'
+                            ? 'border-amber-900/40 bg-amber-950/10'
+                            : 'border-slate-800/80 bg-slate-900/40 hover:bg-slate-900'
+                        }`}
+                      >
+                        <div
+                          className="flex items-start justify-between gap-2 cursor-pointer"
+                          onClick={() => hasDetails && setExpandedLogId(isExpanded ? null : log.id)}
+                        >
+                          <div className="flex items-start gap-2">
+                            <span className="text-[10px] text-slate-500 font-mono shrink-0">
+                              {log.timestamp}
+                            </span>
+
+                            {getLogBadge(log)}
+
+                            <div className="flex flex-col">
+                              <span className="text-slate-200 leading-snug">
+                                {log.message}
+                              </span>
+                            </div>
+                          </div>
+
+                          {hasDetails && (
+                            <button className="text-slate-500 hover:text-slate-300 shrink-0">
+                              {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Expandable Details Box */}
+                        {isExpanded && hasDetails && (
+                          <div className="mt-2 rounded bg-slate-950 p-2 font-mono text-[10.5px] text-slate-300 space-y-1 border border-slate-800">
+                            {log.details && (
+                              <p className="text-slate-300 whitespace-pre-wrap">{log.details}</p>
+                            )}
+                            {log.args && (
+                              <div>
+                                <span className="text-amber-400 font-bold">Args:</span>
+                                <pre className="text-slate-400 overflow-x-auto">{JSON.stringify(log.args, null, 2)}</pre>
+                              </div>
+                            )}
+                            {log.result && (
+                              <div>
+                                <span className="text-emerald-400 font-bold">MCP Result:</span>
+                                <pre className="text-slate-400 overflow-x-auto">{JSON.stringify(log.result, null, 2)}</pre>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
           );
         })}
 
-        {filteredLogs.length === 0 && (
+        {agentGroups.length === 0 && (
           <div className="py-12 text-center text-slate-600 italic">
             No process logs recorded yet. Execute a research query to view real-time traces.
           </div>

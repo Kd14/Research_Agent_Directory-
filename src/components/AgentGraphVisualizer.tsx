@@ -38,6 +38,10 @@ export const AgentGraphVisualizer: React.FC<AgentGraphVisualizerProps> = ({
 
   const selectedAgent = agents[selectedAgentId] || agents['lead'];
 
+  // Only render nodes for agents actually deployed in this session (the
+  // user can opt specialists out before starting a run).
+  const activeSpecialistIds = ['literature', 'pipeline', 'validation', 'synthesis'].filter(id => agents[id]);
+
   const getStatusBadge = (status: AgentStatus, isCurrentStep: boolean) => {
     if (isCurrentStep && isExecuting) {
       return (
@@ -176,8 +180,11 @@ export const AgentGraphVisualizer: React.FC<AgentGraphVisualizerProps> = ({
           </div>
 
           {/* Specialized Agent Nodes Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 z-10 mt-4">
-            {['literature', 'pipeline', 'validation', 'synthesis'].map(agentId => {
+          <div
+            className="grid grid-cols-2 gap-3 z-10 mt-4"
+            style={{ gridTemplateColumns: `repeat(${Math.min(activeSpecialistIds.length, 4) || 1}, minmax(0, 1fr))` }}
+          >
+            {activeSpecialistIds.map(agentId => {
               const node = agents[agentId];
               const isSelected = selectedAgentId === agentId;
               const isCurrent = activeStepAgentId === agentId;

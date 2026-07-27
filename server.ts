@@ -548,11 +548,20 @@ async function startServer() {
   // POST /api/research/plan -> Decomposes user request into Instruction Set & Agent Assignment
   app.post('/api/research/plan', async (req: Request, res: Response) => {
     try {
-      const { userPrompt, docIds } = req.body;
+      const { userPrompt, docIds, activeAgentIds } = req.body;
 
       if (!userPrompt) {
         return res.status(400).json({ error: 'userPrompt is required' });
       }
+
+      const allSpecialists = getDefaultAgents();
+      const domainAgentIds = ['literature', 'pipeline', 'validation'];
+      // Domain specialists are opt-in per run; 'synthesis' (final report formatting)
+      // is always available alongside the always-on 'lead' orchestrator.
+      const selectedDomainIds: string[] = Array.isArray(activeAgentIds) && activeAgentIds.length > 0
+        ? domainAgentIds.filter(id => activeAgentIds.includes(id))
+        : domainAgentIds;
+      const availableAgentIds = [...selectedDomainIds, 'synthesis'];
 
       const selectedDocs = docIds?.length
         ? documentsStore.filter(d => docIds.includes(d.id))
@@ -560,21 +569,22 @@ async function startServer() {
 
       const docSummaries = selectedDocs.map(d => `- [${d.category}] ${d.title} (${d.fileName}): ${d.summary || d.content.slice(0, 150)}`).join('\n');
 
+      const agentRoster = availableAgentIds
+        .map((id, idx) => `${idx + 1}. "${id}": ${allSpecialists[id].name} - ${allSpecialists[id].title} (Tools: ${allSpecialists[id].toolsAccess.join(', ')})`)
+        .join('\n');
+
       const systemPrompt = `You are Dr. Astra, Lead Orchestrator of an advanced Agentic Network & MCP Research Hub.
 Your task is to take a research request and document context, then decompose it into a structured instruction set for specialized research agents.
 
-Available Specialized Agents:
-1. "literature": Agent Hypatia - Literature & Theory Researcher (Tools: mcp_doc_search, mcp_web_grounding)
-2. "pipeline": Agent Turing - Model Pipeline & Compute Architect (Tools: mcp_doc_search, mcp_spec_analyzer)
-3. "validation": Agent Veritas - Fact-Checking & Logic Auditor (Tools: mcp_doc_search, mcp_hypothesis_tester)
-4. "synthesis": Agent Nexus - Report Synthesis & Visualization Specialist (Tools: mcp_synthesis_engine)
+Available Specialized Agents (only assign steps to these):
+${agentRoster}
 
 Generate a JSON object containing:
 - title: A concise, technical research session title
 - researchGoal: A 2-sentence formal statement of research objectives
 - instructionSet: An array of 4 to 6 step objects with:
   - stepNumber: integer
-  - assignedAgentId: "literature" | "pipeline" | "validation" | "synthesis"
+  - assignedAgentId: one of ${availableAgentIds.map(id => `"${id}"`).join(' | ')}
   - agentName: string
   - title: short step title
   - instruction: detailed technical directive for the agent
@@ -622,18 +632,27 @@ ${docSummaries || 'No specific documents selected; using general technical knowl
 
       const planData = JSON.parse(geminiRes.text.trim());
 
-      const formattedInstructionSet: InstructionStep[] = planData.instructionSet.map((step: any, idx: number) => ({
-        id: `step_${idx + 1}_${Date.now()}`,
-        stepNumber: idx + 1,
-        assignedAgentId: step.assignedAgentId,
-        agentName: step.agentName || step.assignedAgentId.toUpperCase(),
-        title: step.title,
-        instruction: step.instruction,
-        requiredTools: step.requiredTools || ['mcp_doc_search'],
-        status: 'pending'
-      }));
+      // The model is instructed to only use availableAgentIds, but guard against
+      // it hallucinating a deselected agent so the UI never references a missing node.
+      const fallbackAgentId = availableAgentIds[0];
+      const formattedInstructionSet: InstructionStep[] = planData.instructionSet.map((step: any, idx: number) => {
+        const assignedAgentId = availableAgentIds.includes(step.assignedAgentId) ? step.assignedAgentId : fallbackAgentId;
+        return {
+          id: `step_${idx + 1}_${Date.now()}`,
+          stepNumber: idx + 1,
+          assignedAgentId,
+          agentName: assignedAgentId === step.assignedAgentId ? (step.agentName || assignedAgentId.toUpperCase()) : allSpecialists[assignedAgentId].name,
+          title: step.title,
+          instruction: step.instruction,
+          requiredTools: step.requiredTools || ['mcp_doc_search'],
+          status: 'pending'
+        };
+      });
 
-      const initialAgents = getDefaultAgents();
+      const initialAgents: Record<string, AgentNode> = {
+        lead: allSpecialists.lead,
+        ...Object.fromEntries(availableAgentIds.map(id => [id, allSpecialists[id]]))
+      };
 
       // Create initial MCP Log
       const initialLogs: MCPLogEntry[] = [
