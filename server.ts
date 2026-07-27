@@ -1,13 +1,38 @@
+import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import path from 'path';
+import fs from 'fs';
 import multer from 'multer';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import { INITIAL_DOCUMENTS } from './src/data/sampleDocuments';
 import { TechDocument, InstructionStep, AgentNode, MCPLogEntry, MCPTool } from './src/types';
 
-// In-memory document storage
-let documentsStore: TechDocument[] = [...INITIAL_DOCUMENTS];
+// Document persistence: local JSON file so uploads/creates/deletes survive server restarts
+const DATA_DIR = path.join(process.cwd(), 'data');
+const DOCUMENTS_FILE = path.join(DATA_DIR, 'documents.json');
+
+function loadDocumentsFromDisk(): TechDocument[] {
+  try {
+    if (fs.existsSync(DOCUMENTS_FILE)) {
+      return JSON.parse(fs.readFileSync(DOCUMENTS_FILE, 'utf-8'));
+    }
+  } catch (err) {
+    console.error('Failed to load persisted documents, falling back to samples:', err);
+  }
+  return [...INITIAL_DOCUMENTS];
+}
+
+function saveDocumentsToDisk(docs: TechDocument[]) {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(DOCUMENTS_FILE, JSON.stringify(docs, null, 2));
+  } catch (err) {
+    console.error('Failed to persist documents:', err);
+  }
+}
+
+let documentsStore: TechDocument[] = loadDocumentsFromDisk();
 
 // Registered MCP Tools
 const MCP_TOOLS: MCPTool[] = [
@@ -147,6 +172,233 @@ function getDefaultAgents(): Record<string, AgentNode> {
   };
 }
 
+// Deterministic keyword-overlap document search (no embeddings needed for a personal document set).
+// Scores each document by the fraction of distinct query keywords it contains, then returns the
+// highest-scoring documents with a snippet centered on the first matching keyword.
+function searchDocuments(query: string, targetDocs: TechDocument[], topK = 5) {
+  const keywords = Array.from(new Set(
+    query.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2)
+  ));
+
+  const scored = targetDocs.map(doc => {
+    const lowerContent = doc.content.toLowerCase();
+    let matchedKeywords = 0;
+    let firstIndex = -1;
+
+    for (const keyword of keywords) {
+      const idx = lowerContent.indexOf(keyword);
+      if (idx >= 0) {
+        matchedKeywords++;
+        if (firstIndex === -1 || idx < firstIndex) firstIndex = idx;
+      }
+    }
+
+    const snippetStart = firstIndex >= 0 ? firstIndex : 0;
+    const snippet = doc.content.substring(
+      Math.max(0, snippetStart - 100),
+      Math.min(doc.content.length, snippetStart + 300)
+    );
+
+    return {
+      id: doc.id,
+      title: doc.title,
+      fileName: doc.fileName,
+      category: doc.category,
+      snippet,
+      matchScore: keywords.length ? Number((matchedKeywords / keywords.length).toFixed(2)) : 0
+    };
+  })
+  .filter(m => m.matchScore > 0)
+  .sort((a, b) => b.matchScore - a.matchScore)
+  .slice(0, topK);
+
+  return scored;
+}
+
+// Executes a single MCP tool against real inputs. Shared by the direct /api/mcp/execute route
+// and the agentic step-execution pipeline, so tool behaviour is identical regardless of caller.
+async function runMcpTool(toolName: string, args: Record<string, any>): Promise<any> {
+  if (toolName === 'mcp_doc_search') {
+    const query = String(args?.query || '');
+    const docIds = args?.docIds as string[] | undefined;
+    const topK = Number(args?.topK) || 5;
+    const targetDocs = docIds?.length ? documentsStore.filter(d => docIds.includes(d.id)) : documentsStore;
+
+    const results = searchDocuments(query, targetDocs, topK);
+    return { query, matchesFound: results.length, results };
+  }
+
+  if (toolName === 'mcp_spec_analyzer') {
+    const batchSize = Number(args?.batchSize || 1);
+    const seqLen = Number(args?.seqLen || 128000);
+    const paramBillion = Number(args?.paramCountBillion || 70);
+    const precision = args?.precision || 'FP8';
+
+    const bytesPerParam = precision === 'FP8' ? 1 : 2;
+    const weightsGB = (paramBillion * bytesPerParam);
+    const kvCachePerTokenMB = (2 * 64 * 8192 * (precision === 'FP8' ? 1 : 2)) / (1024 * 1024); // approx
+    const kvCacheTotalGB = (batchSize * seqLen * kvCachePerTokenMB) / 1024;
+    const totalVRAMReqGB = (weightsGB + kvCacheTotalGB * 1.25); // plus activation memory
+
+    return {
+      parametersBillion: paramBillion,
+      sequenceLength: seqLen,
+      precision,
+      modelWeightsVRAM_GB: weightsGB.toFixed(2),
+      kvCacheVRAM_GB: kvCacheTotalGB.toFixed(2),
+      estimatedTotalVRAM_GB: totalVRAMReqGB.toFixed(2),
+      recommendedH100GPUs: Math.ceil(totalVRAMReqGB / 70),
+      throughputTFLOPS: precision === 'FP8' ? 1280 : 840
+    };
+  }
+
+  if (toolName === 'mcp_web_grounding') {
+    const searchQuery = args?.searchQuery || 'Large Language Model Context Window Scaling';
+    try {
+      const ai = getGeminiClient();
+      const geminiRes = await ai.models.generateContent({
+        model: 'gemini-3.6-flash',
+        contents: `Provide 3 key research points or citations for: ${searchQuery}`,
+        config: {
+          tools: [{ googleSearch: {} }]
+        }
+      });
+
+      const chunks = geminiRes.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+      return {
+        searchQuery,
+        summary: geminiRes.text,
+        sources: chunks.map((c: any) => ({ title: c.web?.title, url: c.web?.uri }))
+      };
+    } catch (err: any) {
+      console.error('mcp_web_grounding error:', err);
+      return {
+        searchQuery,
+        summary: `Web grounding request failed (${err.message || 'unknown error'}). No live search results available.`,
+        sources: [],
+        error: true
+      };
+    }
+  }
+
+  if (toolName === 'mcp_hypothesis_tester') {
+    const hypothesis = String(args?.hypothesis || '');
+    const givenFacts = (args?.givenFacts as string[] | undefined) || [];
+
+    try {
+      const ai = getGeminiClient();
+      const prompt = `You are a rigorous logic and mathematics verification engine embedded in an MCP tool server.
+
+Evaluate the following hypothesis strictly against the given facts. Do not assume anything not stated or directly derivable.
+
+Hypothesis: "${hypothesis}"
+
+Given Facts:
+${givenFacts.length ? givenFacts.map(f => `- ${f}`).join('\n') : 'None provided - evaluate using only the hypothesis text itself.'}
+
+Return a JSON object with:
+- status: one of "VERIFIED", "VERIFIED_WITH_BOUNDS", "REFUTED", "INSUFFICIENT_EVIDENCE"
+- confidenceScore: number 0 to 1 reflecting evidentiary strength, not fluency
+- proofSummary: concise explanation of the reasoning/derivation that led to the verdict
+- riskFactors: array of specific conditions or edge cases that could invalidate the hypothesis`;
+
+      const geminiRes = await ai.models.generateContent({
+        model: 'gemini-3.6-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              status: { type: Type.STRING },
+              confidenceScore: { type: Type.NUMBER },
+              proofSummary: { type: Type.STRING },
+              riskFactors: { type: Type.ARRAY, items: { type: Type.STRING } }
+            },
+            required: ['status', 'confidenceScore', 'proofSummary', 'riskFactors']
+          }
+        }
+      });
+
+      const parsed = JSON.parse(geminiRes.text.trim());
+      return { hypothesis, ...parsed };
+    } catch (err: any) {
+      console.error('mcp_hypothesis_tester error:', err);
+      return {
+        hypothesis,
+        status: 'INSUFFICIENT_EVIDENCE',
+        confidenceScore: 0,
+        proofSummary: `Verification failed due to a tool error (${err.message || 'unknown error'}); no verdict could be produced.`,
+        riskFactors: ['Verification engine unavailable']
+      };
+    }
+  }
+
+  return { status: 'executed', tool: toolName, args };
+}
+
+// JSON-schema function declarations so agents can invoke real tools via Gemini function calling
+// rather than the model merely narrating a fictional tool call.
+function getFunctionDeclarationForTool(toolName: string): FunctionDeclaration | null {
+  switch (toolName) {
+    case 'mcp_doc_search':
+      return {
+        name: 'mcp_doc_search',
+        description: 'Searches the uploaded technical documents for passages relevant to a query.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            query: { type: Type.STRING, description: 'Keywords or question to search for in the documents.' },
+            topK: { type: Type.INTEGER, description: 'Maximum number of matching documents to return.' }
+          },
+          required: ['query']
+        }
+      };
+    case 'mcp_spec_analyzer':
+      return {
+        name: 'mcp_spec_analyzer',
+        description: 'Computes VRAM memory budget, KV-cache size, and throughput estimates for a given model/workload configuration.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            batchSize: { type: Type.NUMBER, description: 'Inference batch size.' },
+            seqLen: { type: Type.NUMBER, description: 'Sequence/context length in tokens.' },
+            paramCountBillion: { type: Type.NUMBER, description: 'Model parameter count in billions.' },
+            precision: { type: Type.STRING, description: 'Numeric precision, e.g. FP8 or FP16.' }
+          },
+          required: ['paramCountBillion']
+        }
+      };
+    case 'mcp_hypothesis_tester':
+      return {
+        name: 'mcp_hypothesis_tester',
+        description: 'Runs formal logical/mathematical verification of a claim against a set of given facts.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            hypothesis: { type: Type.STRING, description: 'The claim to verify.' },
+            givenFacts: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Known facts to verify the hypothesis against.' }
+          },
+          required: ['hypothesis']
+        }
+      };
+    case 'mcp_web_grounding':
+      return {
+        name: 'mcp_web_grounding',
+        description: 'Searches the live web for current research, benchmarks, or documentation.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            searchQuery: { type: Type.STRING, description: 'The web search query.' }
+          },
+          required: ['searchQuery']
+        }
+      };
+    default:
+      return null;
+  }
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -218,6 +470,7 @@ async function startServer() {
       };
 
       documentsStore.unshift(newDoc);
+      saveDocumentsToDisk(documentsStore);
       res.json({ success: true, document: newDoc });
     } catch (err: any) {
       console.error('Document upload error:', err);
@@ -246,6 +499,7 @@ async function startServer() {
       };
 
       documentsStore.unshift(newDoc);
+      saveDocumentsToDisk(documentsStore);
       res.json({ success: true, document: newDoc });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -256,6 +510,7 @@ async function startServer() {
   app.delete('/api/documents/:id', (req: Request, res: Response) => {
     const { id } = req.params;
     documentsStore = documentsStore.filter(d => d.id !== id);
+    saveDocumentsToDisk(documentsStore);
     res.json({ success: true, remainingCount: documentsStore.length });
   });
 
@@ -276,91 +531,7 @@ async function startServer() {
     tool.callCount++;
     tool.status = 'busy';
 
-    let result: any = null;
-
-    if (toolName === 'mcp_doc_search') {
-      const query = (args?.query || '').toLowerCase();
-      const docIds = args?.docIds as string[] | undefined;
-      const targetDocs = docIds?.length ? documentsStore.filter(d => docIds.includes(d.id)) : documentsStore;
-
-      const matches = targetDocs.map(doc => {
-        const index = doc.content.toLowerCase().indexOf(query);
-        const snippet = index >= 0 
-          ? doc.content.substring(Math.max(0, index - 100), Math.min(doc.content.length, index + 300))
-          : doc.content.substring(0, 400);
-        return {
-          id: doc.id,
-          title: doc.title,
-          fileName: doc.fileName,
-          category: doc.category,
-          snippet,
-          matchScore: index >= 0 ? 0.95 : 0.6
-        };
-      });
-
-      result = { query, matchesFound: matches.length, results: matches };
-    } else if (toolName === 'mcp_spec_analyzer') {
-      const batchSize = Number(args?.batchSize || 1);
-      const seqLen = Number(args?.seqLen || 128000);
-      const paramBillion = Number(args?.paramCountBillion || 70);
-      const precision = args?.precision || 'FP8';
-
-      const bytesPerParam = precision === 'FP8' ? 1 : 2;
-      const weightsGB = (paramBillion * bytesPerParam);
-      const kvCachePerTokenMB = (2 * 64 * 8192 * (precision === 'FP8' ? 1 : 2)) / (1024 * 1024); // approx
-      const kvCacheTotalGB = (batchSize * seqLen * kvCachePerTokenMB) / 1024;
-      const totalVRAMReqGB = (weightsGB + kvCacheTotalGB * 1.25); // plus activation memory
-
-      result = {
-        parametersBillion: paramBillion,
-        sequenceLength: seqLen,
-        precision,
-        modelWeightsVRAM_GB: weightsGB.toFixed(2),
-        kvCacheVRAM_GB: kvCacheTotalGB.toFixed(2),
-        estimatedTotalVRAM_GB: totalVRAMReqGB.toFixed(2),
-        recommendedH100GPUs: Math.ceil(totalVRAMReqGB / 70),
-        throughputTFLOPS: precision === 'FP8' ? 1280 : 840
-      };
-    } else if (toolName === 'mcp_web_grounding') {
-      const searchQuery = args?.searchQuery || 'Large Language Model Context Window Scaling';
-      try {
-        const ai = getGeminiClient();
-        const geminiRes = await ai.models.generateContent({
-          model: 'gemini-3.6-flash',
-          contents: `Provide 3 key research points or citations for: ${searchQuery}`,
-          config: {
-            tools: [{ googleSearch: {} }]
-          }
-        });
-
-        const chunks = geminiRes.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-        result = {
-          searchQuery,
-          summary: geminiRes.text,
-          sources: chunks.map((c: any) => ({ title: c.web?.title, url: c.web?.uri }))
-        };
-      } catch (err: any) {
-        result = {
-          searchQuery,
-          summary: `Web search analysis completed for query: "${searchQuery}". Found relevant recent literature on context extension and quantization.`,
-          sources: [
-            { title: 'arXiv:2605.11201 [cs.CL] - High Efficiency Ring Attention', url: 'https://arxiv.org/abs/2605.11201' },
-            { title: 'NVIDIA Technical Docs: H200 Memory Optimization', url: 'https://docs.nvidia.com/deeplearning' }
-          ]
-        };
-      }
-    } else if (toolName === 'mcp_hypothesis_tester') {
-      const hypothesis = args?.hypothesis || 'FP8 quantization retains 99% baseline accuracy.';
-      result = {
-        hypothesis,
-        status: 'VERIFIED_WITH_BOUNDS',
-        confidenceScore: 0.94,
-        proofSummary: 'Block-wise dynamic scaling preserves matrix product bounds within 0.02 PPL threshold under sequence lengths up to 128k tokens.',
-        riskFactors: ['High variance in softmax activation outliers in layers 28-32']
-      };
-    } else {
-      result = { status: 'executed', tool: toolName, args };
-    }
+    const result = await runMcpTool(toolName, args || {});
 
     tool.status = 'idle';
 
@@ -498,74 +669,9 @@ ${docSummaries || 'No specific documents selected; using general technical knowl
 
     } catch (err: any) {
       console.error('Plan generation error:', err);
-      // Fallback instruction set if AI call fails or lacks key
-      const fallbackSteps: InstructionStep[] = [
-        {
-          id: 'step_1',
-          stepNumber: 1,
-          assignedAgentId: 'literature',
-          agentName: 'Agent Hypatia',
-          title: 'Extract Theoretical Principles & Prior Art',
-          instruction: 'Search technical documents and literature for core equations, architectural assumptions, and scaling parameters.',
-          requiredTools: ['mcp_doc_search', 'mcp_web_grounding'],
-          status: 'pending'
-        },
-        {
-          id: 'step_2',
-          stepNumber: 2,
-          assignedAgentId: 'pipeline',
-          agentName: 'Agent Turing',
-          title: 'Compute VRAM & Pipeline Hardware Overhead',
-          instruction: 'Analyze pipeline specs, VRAM footprints, tensor parallelism overhead, and FLOPs throughput for target batch size.',
-          requiredTools: ['mcp_spec_analyzer', 'mcp_doc_search'],
-          status: 'pending'
-        },
-        {
-          id: 'step_3',
-          stepNumber: 3,
-          assignedAgentId: 'validation',
-          agentName: 'Agent Veritas',
-          title: 'Fact-Check Hypotheses & Quantization Stability',
-          instruction: 'Cross-validate FP8 vs FP16 precision loss and verify scaling law claims against benchmark logs.',
-          requiredTools: ['mcp_hypothesis_tester'],
-          status: 'pending'
-        },
-        {
-          id: 'step_4',
-          stepNumber: 4,
-          assignedAgentId: 'synthesis',
-          agentName: 'Agent Nexus',
-          title: 'Synthesize Deep Technical Report',
-          instruction: 'Compile all multi-agent outputs, architectural diagrams, and citations into executive markdown report.',
-          requiredTools: ['mcp_synthesis_engine'],
-          status: 'pending'
-        }
-      ];
-
-      res.json({
-        success: true,
-        session: {
-          id: `session_${Date.now()}`,
-          title: 'Technical Research & Pipeline Spec Audit',
-          userPrompt: req.body.userPrompt || 'Research model pipeline and context window scaling',
-          selectedDocIds: req.body.docIds || [],
-          executionMode: 'auto',
-          currentStepIndex: 0,
-          instructionSet: fallbackSteps,
-          status: 'planning',
-          logs: [{
-            id: `log_init`,
-            timestamp: new Date().toLocaleTimeString(),
-            agentId: 'lead',
-            agentName: 'Dr. Astra',
-            type: 'system_event',
-            message: 'Session created with 4 research steps.',
-            level: 'info'
-          }],
-          agents: getDefaultAgents(),
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        }
+      res.status(502).json({
+        success: false,
+        error: err.message || 'Failed to generate a research plan. Check that GEMINI_API_KEY is set and valid.'
       });
     }
   });
@@ -591,86 +697,96 @@ ${docSummaries || 'No specific documents selected; using general technical knowl
         .map(d => `--- Document: ${d.title} (${d.category}) ---\n${d.content.slice(0, 2000)}`)
         .join('\n\n');
 
-      const prompt = `You are ${agent.name} (${agent.title}), an expert AI research agent in a managed MCP network.
+      const ai = getGeminiClient();
+
+      // Phase 1: let the agent choose a real MCP tool + arguments for its directive via
+      // Gemini function calling, then actually execute that tool - no fabricated tool calls.
+      const availableTools = ((step.requiredTools || []) as string[])
+        .map(getFunctionDeclarationForTool)
+        .filter((d): d is FunctionDeclaration => Boolean(d));
+
+      let toolCallUsed: string | null = null;
+      let toolArgs: Record<string, unknown> = {};
+      let toolResult: any = null;
+
+      if (availableTools.length > 0) {
+        const toolChoiceRes = await ai.models.generateContent({
+          model: 'gemini-3.6-flash',
+          contents: `You are ${agent.name} (${agent.title}).
 Your Directive: "${step.instruction}"
 ${userFeedback ? `Human Supervisor Feedback / Intervention: "${userFeedback}"` : ''}
 
+Call exactly one of the available tools with the arguments needed to gather evidence for this directive.`,
+          config: { tools: [{ functionDeclarations: availableTools }] }
+        });
+
+        const call = toolChoiceRes.functionCalls?.[0];
+        if (call?.name) {
+          toolCallUsed = call.name;
+          toolArgs = call.args || {};
+        } else {
+          // Model declined to call a function - fall back to the step's primary declared tool.
+          toolCallUsed = step.requiredTools[0];
+          toolArgs = toolCallUsed === 'mcp_doc_search' ? { query: step.title } : {};
+        }
+
+        toolResult = await runMcpTool(toolCallUsed as string, { ...toolArgs, docIds: selectedDocIds });
+      }
+
+      // Phase 2: produce the agent's analytical output grounded in the REAL tool result above.
+      const analysisPrompt = `You are ${agent.name} (${agent.title}), an expert AI research agent in a managed MCP network.
+Your Directive: "${step.instruction}"
+${userFeedback ? `Human Supervisor Feedback / Intervention: "${userFeedback}"` : ''}
+
+${toolCallUsed ? `MCP Tool Invoked: ${toolCallUsed}\nTool Arguments: ${JSON.stringify(toolArgs)}\nTool Result:\n${JSON.stringify(toolResult, null, 2)}\n` : ''}
 Available Document Context:
 ${docTextSnippet}
 
 Your task:
-1. Formulate step-by-step technical thoughts.
-2. Produce a clear, highly detailed, rigorous analytical output addressing the directive.
+1. Formulate step-by-step technical thoughts, referencing the tool result above where relevant.
+2. Produce a clear, highly detailed, rigorous analytical output addressing the directive. Do not invent findings beyond the tool result and document context provided.
 3. Call out specific metrics, math formulas, pipeline constraints, or document references.
 
 Generate a JSON object with:
-- thoughtTrace: Array of 3 string items showing your inner reasoning steps and tool calls
-- toolCallUsed: String name of tool used (e.g. "mcp_doc_search", "mcp_spec_analyzer", "mcp_hypothesis_tester")
-- toolArgs: Object containing arguments passed to MCP server
+- thoughtTrace: Array of 3 string items showing your inner reasoning steps
 - agentOutput: Markdown string containing your detailed technical findings and analysis
 - keyTakeaways: Array of 2-3 short summary bullet points`;
 
-      const ai = getGeminiClient();
-      const geminiRes = await ai.models.generateContent({
+      const analysisRes = await ai.models.generateContent({
         model: 'gemini-3.6-flash',
-        contents: prompt,
+        contents: analysisPrompt,
         config: {
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
             properties: {
-              thoughtTrace: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING }
-              },
-              toolCallUsed: { type: Type.STRING },
-              toolArgs: {
-                type: Type.OBJECT,
-                properties: {
-                  query: { type: Type.STRING },
-                  summary: { type: Type.STRING }
-                }
-              },
+              thoughtTrace: { type: Type.ARRAY, items: { type: Type.STRING } },
               agentOutput: { type: Type.STRING },
-              keyTakeaways: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING }
-              }
+              keyTakeaways: { type: Type.ARRAY, items: { type: Type.STRING } }
             },
-            required: ['thoughtTrace', 'toolCallUsed', 'agentOutput', 'keyTakeaways']
+            required: ['thoughtTrace', 'agentOutput', 'keyTakeaways']
           }
         }
       });
 
-      const parsed = JSON.parse(geminiRes.text.trim());
+      const parsed = JSON.parse(analysisRes.text.trim());
 
       res.json({
         success: true,
         agentId,
         thoughtTrace: parsed.thoughtTrace,
-        toolCallUsed: parsed.toolCallUsed,
-        toolArgs: parsed.toolArgs || {},
+        toolCallUsed,
+        toolArgs,
+        toolResult,
         agentOutput: parsed.agentOutput,
         keyTakeaways: parsed.keyTakeaways
       });
     } catch (err: any) {
       console.error('Execute step error:', err);
-      // Fallback response if API fails
-      res.json({
-        success: true,
-        agentId: req.body.step?.assignedAgentId || 'literature',
-        thoughtTrace: [
-          'Analyzing provided technical specifications and papers...',
-          'Invoking MCP tool mcp_doc_search for parameter retrieval...',
-          'Synthesizing empirical findings and memory bandwidth metrics.'
-        ],
-        toolCallUsed: 'mcp_doc_search',
-        toolArgs: { query: 'pipeline memory bandwidth and throughput' },
-        agentOutput: `### Analysis by ${req.body.step?.agentName || 'Agent'}\n\n**Directive:** ${req.body.step?.instruction}\n\n#### Key Technical Insights\n1. **Memory Bandwidth & VRAM Overhead**: KV-cache quantization reduces per-token footprint to 0.25KB FP8.\n2. **Throughput Scaling**: Ring Attention with SRAM tiling yields 1,320 TFLOPS on Hopper H100 SXM5.\n3. **Parallelism Recommendation**: Use 3D Parallelism with TP=8, PP=4, and DP=128 to minimize inter-node communication latency.`,
-        keyTakeaways: [
-          'KV cache memory footprint reduced by 4x using FP8 block scaling',
-          '3D parallelism masks 90% of inter-node latency'
-        ]
+      res.status(502).json({
+        success: false,
+        agentId: req.body.step?.assignedAgentId,
+        error: err.message || 'Agent step execution failed'
       });
     }
   });
@@ -725,42 +841,9 @@ ${targetDocs.map(d => `- ${d.title} (${d.category})`).join('\n')}`;
       });
     } catch (err: any) {
       console.error('Synthesize error:', err);
-      res.json({
-        success: true,
-        report: `# Comprehensive Technical Research Report: Agentic Pipeline & Model Architecture
-
-## Executive Summary
-This report synthesizes findings from the **NexusAgent Managed Research Network** regarding high-performance model pipeline architecture, context length scaling, and RLHF alignment limits.
-
-## Architectural Diagram
-\`\`\`mermaid
-graph TD
-  UserPrompt[User Research Query] --> LeadAgent[Dr. Astra: Lead Orchestrator]
-  LeadAgent --> MCP[MCP Tool Protocol Server]
-  MCP --> LitAgent[Agent Hypatia: Literature]
-  MCP --> PipeAgent[Agent Turing: Compute Architect]
-  MCP --> ValAgent[Agent Veritas: Logic Auditor]
-  LitAgent --> DocSearch[mcp_doc_search]
-  PipeAgent --> SpecAnalyzer[mcp_spec_analyzer]
-  ValAgent --> HypoTester[mcp_hypothesis_tester]
-  DocSearch --> FinalSynthesis[Agent Nexus: Synthesis Engine]
-  SpecAnalyzer --> FinalSynthesis
-  HypoTester --> FinalSynthesis
-  FinalSynthesis --> FinalReport[Published Technical Report]
-\`\`\`
-
-## Key Empirical Findings & Benchmarks
-
-| Metric / Parameter | Baseline (FP16) | Optimized (FP8 + FA3) | Performance Delta |
-|-------------------|-----------------|----------------------|-------------------|
-| 16k Sequence TFLOPS | 180 TFLOPS | 840 TFLOPS | +366% Throughput |
-| 64k Context VRAM | 128 GB VRAM | 32 GB VRAM | -75% Memory Footprint |
-| Alignment Stability | PPO (12k steps) | SimPO (50k steps) | +316% Step Margin |
-
-## Final Actionable Recommendations
-1. **Deploy FP8 Block-wise Quantization**: Utilize 128x128 block scaling for KV-cache to maintain 0.9984 cosine similarity.
-2. **Optimize 3D Parallelism Topology**: Configure Tensor Parallelism TP=8 and Pipeline Parallelism PP=4 over NVLink Switch fabric.
-3. **Continuous MCP Verification**: Automate regression testing using 'mcp_hypothesis_tester' on nightly build checkins.`
+      res.status(502).json({
+        success: false,
+        error: err.message || 'Failed to synthesize the final report. Check that GEMINI_API_KEY is set and valid.'
       });
     }
   });

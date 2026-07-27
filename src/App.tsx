@@ -52,6 +52,7 @@ export default function App() {
   const [isPlanning, setIsPlanning] = useState<boolean>(false);
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
   const [isPaused, setIsPaused] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Execution Step State
   const [currentStepIndex, setCurrentStepIndex] = useState<number>(0);
@@ -167,6 +168,7 @@ export default function App() {
     setSession(null);
     setAgentOutputs({});
     setCurrentStepIndex(0);
+    setErrorMessage(null);
 
     try {
       const res = await fetch('/api/research/plan', {
@@ -183,9 +185,12 @@ export default function App() {
         setSession(data.session);
         setIsExecuting(true);
         setIsPaused(false);
+      } else {
+        setErrorMessage(data.error || 'Failed to create research plan.');
       }
     } catch (err) {
       console.error('Failed to create research plan:', err);
+      setErrorMessage('Failed to reach the research server. Is it running?');
     } finally {
       setIsPlanning(false);
     }
@@ -248,7 +253,11 @@ export default function App() {
       });
       const data = await res.json();
 
-      // Log MCP tool execution
+      if (!data.success) {
+        throw new Error(data.error || 'Agent step execution failed');
+      }
+
+      // Log MCP tool execution with the actual result returned by the tool server
       if (data.toolCallUsed) {
         addLogEntry({
           id: `log_${Date.now()}_tool`,
@@ -258,6 +267,7 @@ export default function App() {
           type: 'mcp_tool_call',
           toolName: data.toolCallUsed,
           args: data.toolArgs,
+          result: data.toolResult,
           message: `Invoked MCP tool ${data.toolCallUsed}`,
           level: 'mcp_tool'
         });
@@ -314,6 +324,7 @@ export default function App() {
     } catch (err: any) {
       console.error('Step execution error:', err);
       updateAgentState(agentId, { status: 'error' });
+      setErrorMessage(err.message || 'Agent step execution failed');
       setIsPaused(true);
     }
   };
@@ -350,6 +361,10 @@ export default function App() {
       });
       const data = await res.json();
 
+      if (!data.success) {
+        throw new Error(data.error || 'Report synthesis failed');
+      }
+
       setSession(prev => prev ? {
         ...prev,
         status: 'completed',
@@ -370,8 +385,10 @@ export default function App() {
         level: 'success'
       });
 
-    } catch (err) {
+    } catch (err: any) {
       console.error('Synthesis error:', err);
+      updateAgentState('synthesis', { status: 'error' });
+      setErrorMessage(err.message || 'Report synthesis failed');
       setIsExecuting(false);
     }
   };
@@ -504,6 +521,15 @@ export default function App() {
                   )}
                 </button>
               </div>
+
+              {/* Error Banner */}
+              {errorMessage && (
+                <div className="mb-4 flex items-start gap-2 rounded-xl border border-rose-300 bg-rose-50 p-3 text-xs text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300">
+                  <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span className="flex-1">{errorMessage}</span>
+                  <button onClick={() => setErrorMessage(null)} className="font-bold hover:underline">Dismiss</button>
+                </div>
+              )}
 
               {/* Sample Prompts Grid */}
               {!session && (
