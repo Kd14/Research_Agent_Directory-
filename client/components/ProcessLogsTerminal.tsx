@@ -312,7 +312,7 @@ export const ProcessLogsTerminal: React.FC<ProcessLogsTerminalProps> = ({
                 <div className="space-y-1.5 border-t border-slate-800/80 p-2">
                   {group.logs.map((log) => {
                     const isExpanded = expandedLogId === log.id;
-                    const hasDetails = log.details || log.args || log.result;
+                    const hasDetails = Boolean(log.details || log.args || log.result);
 
                     return (
                       <div
@@ -362,7 +362,7 @@ export const ProcessLogsTerminal: React.FC<ProcessLogsTerminalProps> = ({
                                 <pre className="text-slate-400 overflow-x-auto">{JSON.stringify(log.args, null, 2)}</pre>
                               </div>
                             )}
-                            {log.result && (
+                            {Boolean(log.result) && (
                               <div>
                                 <span className="text-emerald-400 font-bold">MCP Result:</span>
                                 <pre className="text-slate-400 overflow-x-auto">{JSON.stringify(log.result, null, 2)}</pre>

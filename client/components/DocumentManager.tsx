@@ -1,20 +1,29 @@
 import React, { useState } from 'react';
-import { 
-  FileText, 
-  Upload, 
-  Plus, 
-  Trash2, 
-  CheckSquare, 
-  Square, 
-  Search, 
-  Filter, 
-  Eye, 
+import {
+  FileText,
+  Upload,
+  Plus,
+  Trash2,
+  CheckSquare,
+  Square,
+  Search,
+  Filter,
+  Eye,
   Sparkles,
   Tag,
   Clock,
-  HardDrive
+  HardDrive,
+  FolderInput
 } from 'lucide-react';
 import { TechDocument, DocumentCategory } from '../types';
+
+// webkitdirectory/directory aren't in React's HTMLInputElement typings but are supported by
+// Chromium/Firefox/Safari for folder-picker file inputs.
+interface DirectoryInputProps extends React.InputHTMLAttributes<HTMLInputElement> {
+  webkitdirectory?: string;
+  directory?: string;
+}
+const DirectoryInput = (props: DirectoryInputProps) => <input {...props} />;
 
 interface DocumentManagerProps {
   documents: TechDocument[];
@@ -46,6 +55,8 @@ export const DocumentManager: React.FC<DocumentManagerProps> = ({
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [snippetContent, setSnippetContent] = useState<string>('');
   const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const [batchImportStatus, setBatchImportStatus] = useState<string | null>(null);
 
   const categories: string[] = [
     'All',
@@ -87,9 +98,64 @@ export const DocumentManager: React.FC<DocumentManagerProps> = ({
     }
   };
 
+  // Recursive indexing for a dropped/imported folder relies on the browser already flattening
+  // the tree via webkitRelativePath (folder import) or DataTransferItem.webkitGetAsEntry
+  // (drag-drop) - no server-side directory walk is needed for user-initiated imports.
+  const importFiles = async (files: File[]) => {
+    if (files.length === 0) return;
+    setBatchImportStatus(`Importing 0 / ${files.length}...`);
+    let imported = 0;
+    for (const file of files) {
+      const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
+      const folderTag = relativePath?.includes('/') ? relativePath.split('/').slice(0, -1).join('/') : undefined;
+      try {
+        await onUploadDocument(file, 'Technical Architecture', undefined, folderTag);
+      } catch (err) {
+        console.error(`Failed to import ${file.name}:`, err);
+      }
+      imported++;
+      setBatchImportStatus(`Importing ${imported} / ${files.length}...`);
+    }
+    setBatchImportStatus(null);
+  };
+
+  const handleDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const files = Array.from(e.dataTransfer.files || []);
+    await importFiles(files);
+  };
+
+  const handleFolderImportChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    await importFiles(files);
+    e.target.value = '';
+  };
+
   return (
-    <div className="flex flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-      
+    <div
+      onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+      onDragLeave={() => setIsDragging(false)}
+      onDrop={handleDrop}
+      className={`flex flex-col rounded-2xl border p-5 shadow-sm transition-colors ${
+        isDragging
+          ? 'border-indigo-500 border-dashed bg-indigo-50/50 dark:bg-indigo-950/20'
+          : 'border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900'
+      }`}
+    >
+
+      {isDragging && (
+        <div className="mb-4 rounded-xl border border-dashed border-indigo-400 bg-indigo-50 p-6 text-center text-xs font-semibold text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300">
+          Drop files here to import them into the document library
+        </div>
+      )}
+
+      {batchImportStatus && (
+        <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 p-2 text-center text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-800 dark:text-slate-300">
+          {batchImportStatus}
+        </div>
+      )}
+
       {/* Header Controls */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4 mb-4 dark:border-slate-800">
         <div>
@@ -120,6 +186,22 @@ export const DocumentManager: React.FC<DocumentManagerProps> = ({
             <Upload className="h-3.5 w-3.5" />
             <span>Upload Document / Spec</span>
           </button>
+
+          <label
+            title="Import an entire folder (recursive)"
+            className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 cursor-pointer dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+          >
+            <FolderInput className="h-3.5 w-3.5" />
+            <span>Import Folder</span>
+            <DirectoryInput
+              type="file"
+              webkitdirectory=""
+              directory=""
+              multiple
+              className="hidden"
+              onChange={handleFolderImportChange}
+            />
+          </label>
         </div>
       </div>
 

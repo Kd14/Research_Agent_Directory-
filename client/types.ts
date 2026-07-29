@@ -15,6 +15,7 @@ export interface TechDocument {
   uploadedAt: string;
   summary?: string;
   tags: string[];
+  contentHash?: string;
 }
 
 export type AgentRole = 

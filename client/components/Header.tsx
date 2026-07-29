@@ -15,6 +15,7 @@ import {
   Download
 } from 'lucide-react';
 import { SystemStats } from '../types';
+import { SessionMenu } from './SessionMenu';
 
 interface HeaderProps {
   activeTab: 'research' | 'documents' | 'mcp_tools' | 'report';
@@ -24,6 +25,7 @@ interface HeaderProps {
   isPaused: boolean;
   onPauseToggle: () => void;
   onResetSession: () => void;
+  onResumeSession: (sessionId: string) => void;
   hasReport: boolean;
   selectedDocCount: number;
 }
@@ -36,6 +38,7 @@ export const Header: React.FC<HeaderProps> = ({
   isPaused,
   onPauseToggle,
   onResetSession,
+  onResumeSession,
   hasReport,
   selectedDocCount
 }) => {
@@ -159,6 +162,8 @@ export const Header: React.FC<HeaderProps> = ({
             <Download className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
             <span className="hidden sm:inline">Export ZIP</span>
           </a>
+
+          <SessionMenu onResumeSession={onResumeSession} />
 
           <button
             id="btn-reset-session"
