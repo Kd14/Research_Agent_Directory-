@@ -89,6 +89,18 @@ export class SessionService {
     return this.store.readArtifact(id, relativeName);
   }
 
+  writeBinaryArtifact(id: string, relativeName: string, content: Buffer): Result<void, ValidationError> {
+    if (!this.store.exists(id)) {
+      return Err(new ValidationError(`Session ${id} not found`));
+    }
+    this.store.writeBinaryArtifact(id, relativeName, content);
+    return Ok(undefined);
+  }
+
+  readBinaryArtifact(id: string, relativeName: string): Buffer | undefined {
+    return this.store.readBinaryArtifact(id, relativeName);
+  }
+
   list(): SessionMetadata[] {
     return this.store.list();
   }

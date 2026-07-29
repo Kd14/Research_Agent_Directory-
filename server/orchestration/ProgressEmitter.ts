@@ -5,6 +5,8 @@ export type ProgressPhase =
   | 'running_tools'
   | 'analyzing'
   | 'synthesizing'
+  | 'exporting_pdf'
+  | 'pdf_export_failed'
   | 'finished'
   | 'error';
 

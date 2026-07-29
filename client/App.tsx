@@ -312,6 +312,7 @@ export default function App() {
         {activeTab === 'report' && session?.finalReport && (
           <ReportViewer
             reportMarkdown={session.finalReport}
+            sessionId={session.id}
             sessionTitle={session.title}
             userPrompt={session.userPrompt}
             onAskFollowUp={(query) => {

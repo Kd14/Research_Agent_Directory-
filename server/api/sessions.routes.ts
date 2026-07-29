@@ -21,6 +21,21 @@ export function createSessionsRouter(sessionService: SessionService): Router {
     res.json({ success: true, metadata, history, report });
   });
 
+  router.get('/api/sessions/:id/report.pdf', (req: Request, res: Response) => {
+    const result = sessionService.load(req.params.id);
+    if (!result.ok) return sendErrorResponse(res, result.error);
+
+    const { history } = result.value;
+    const pdf = history.finalReportPdfArtifact
+      ? sessionService.readBinaryArtifact(req.params.id, history.finalReportPdfArtifact)
+      : undefined;
+    if (!pdf) return res.status(404).json({ error: 'No PDF report available for this session yet' });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${req.params.id}.pdf"`);
+    res.send(pdf);
+  });
+
   router.post('/api/sessions/:id/rename', (req: Request, res: Response) => {
     const { title } = req.body;
     if (!title) return res.status(400).json({ error: 'title is required' });

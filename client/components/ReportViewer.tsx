@@ -15,6 +15,7 @@ import {
 
 interface ReportViewerProps {
   reportMarkdown: string;
+  sessionId?: string;
   sessionTitle?: string;
   userPrompt?: string;
   onAskFollowUp?: (query: string) => void;
@@ -23,6 +24,7 @@ interface ReportViewerProps {
 
 export const ReportViewer: React.FC<ReportViewerProps> = ({
   reportMarkdown,
+  sessionId,
   sessionTitle,
   userPrompt,
   onAskFollowUp,
@@ -30,6 +32,7 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
 }) => {
   const [copied, setCopied] = useState<boolean>(false);
   const [followUpText, setFollowUpText] = useState<string>('');
+  const [pdfStatus, setPdfStatus] = useState<'idle' | 'loading' | 'error'>('idle');
 
   const handleCopy = () => {
     navigator.clipboard.writeText(reportMarkdown);
@@ -37,15 +40,32 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleDownload = () => {
-    const blob = new Blob([reportMarkdown], { type: 'text/markdown;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `${(sessionTitle || 'research_report').toLowerCase().replace(/\s+/g, '_')}.md`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const pdfFileName = `${(sessionTitle || 'research_report').toLowerCase().replace(/\s+/g, '_')}.pdf`;
+
+  const handleDownloadPdf = async () => {
+    if (!sessionId) return;
+    setPdfStatus('loading');
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/report.pdf`);
+      if (!res.ok) throw new Error('PDF not available');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', pdfFileName);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      setPdfStatus('idle');
+    } catch {
+      setPdfStatus('error');
+    }
+  };
+
+  const handleViewPdf = () => {
+    if (!sessionId) return;
+    window.open(`/api/sessions/${sessionId}/report.pdf`, '_blank', 'noopener,noreferrer');
   };
 
   return (
@@ -89,15 +109,33 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
             <span>{copied ? 'Copied' : 'Copy Markdown'}</span>
           </button>
 
+          {sessionId && (
+            <button
+              onClick={handleViewPdf}
+              className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+              title="Open the polished PDF in a new tab"
+            >
+              <Printer className="h-3.5 w-3.5" />
+              <span>View PDF</span>
+            </button>
+          )}
+
           <button
-            onClick={handleDownload}
-            className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 shadow-sm"
+            onClick={handleDownloadPdf}
+            disabled={!sessionId || pdfStatus === 'loading'}
+            className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Download className="h-3.5 w-3.5" />
-            <span>Export Report (.md)</span>
+            <span>{pdfStatus === 'loading' ? 'Rendering PDF…' : 'Export PDF Report'}</span>
           </button>
         </div>
       </div>
+
+      {pdfStatus === 'error' && (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300">
+          The polished PDF isn't ready for this session yet (it's generated automatically right after synthesis). Try again in a moment, or re-run synthesis.
+        </div>
+      )}
 
       {/* User Context Banner */}
       {userPrompt && (

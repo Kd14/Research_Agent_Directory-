@@ -189,10 +189,10 @@ describe('POST /api/research/run (SSE)', () => {
 });
 
 describe('GET /api/mcp/tools', () => {
-  it('returns the 5 registered tools', async () => {
+  it('returns the 6 registered tools', async () => {
     const app = buildApp({ text: '{}' });
     const res = await request(app).get('/api/mcp/tools');
     expect(res.status).toBe(200);
-    expect(res.body.tools).toHaveLength(5);
+    expect(res.body.tools).toHaveLength(6);
   });
 });

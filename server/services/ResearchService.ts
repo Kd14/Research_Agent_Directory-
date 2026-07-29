@@ -1,5 +1,6 @@
 import type { ExecutionError, PlanningError } from '../errors/AppError';
 import { Ok, type Result } from '../result';
+import { renderMarkdownReportToPdf } from './PdfReportRenderer';
 import type { ExecuteStepInput, ExecuteStepOutput, ExecutionService, SynthesizeInput } from './ExecutionService';
 import type { PlanInput, PlanOutput, PlannerService } from './PlannerService';
 import type { SessionService } from './SessionService';
@@ -62,7 +63,17 @@ export class ResearchService {
 
     if (result.ok && input.sessionId) {
       this.sessions.writeArtifact(input.sessionId, 'report.md', result.value);
-      this.sessions.save(input.sessionId, { finalReportArtifact: 'report.md', status: 'completed' });
+      this.sessions.save(input.sessionId, { finalReportArtifact: 'report.md' });
+
+      try {
+        const pdf = await renderMarkdownReportToPdf({ markdown: result.value, title: input.userPrompt });
+        this.sessions.writeBinaryArtifact(input.sessionId, 'report.pdf', pdf);
+        this.sessions.save(input.sessionId, { finalReportPdfArtifact: 'report.pdf' });
+      } catch {
+        // Best-effort: the markdown report artifact still stands even if PDF export fails.
+      }
+
+      this.sessions.save(input.sessionId, { status: 'completed' });
     }
 
     return result;

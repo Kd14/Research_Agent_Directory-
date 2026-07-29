@@ -20,4 +20,5 @@ export interface SessionHistory {
   agentOutputs: Record<string, string>;
   currentStepIndex: number;
   finalReportArtifact?: string;
+  finalReportPdfArtifact?: string;
 }

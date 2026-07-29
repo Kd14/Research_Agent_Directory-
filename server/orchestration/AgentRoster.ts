@@ -12,7 +12,7 @@ export function getDefaultAgents(): Record<string, AgentNode> {
       status: 'idle',
       progress: 0,
       thoughtTrace: ['System initialized and awaiting research instructions.'],
-      toolsAccess: ['mcp_doc_search', 'mcp_web_grounding', 'mcp_synthesis_engine']
+      toolsAccess: ['mcp_doc_search', 'mcp_web_grounding', 'mcp_synthesis_engine', 'mcp_pdf_report_generator']
     },
     literature: {
       id: 'literature',
@@ -56,11 +56,11 @@ export function getDefaultAgents(): Record<string, AgentNode> {
       name: 'Agent Nexus',
       title: 'Report Synthesis & Visualization Specialist',
       avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80',
-      description: 'Formats finalized research findings into clean markdown, generates Mermaid.js architecture diagrams, and formats citations.',
+      description: 'Formats finalized research findings into clean markdown, generates Mermaid.js architecture diagrams, and exports the polished final PDF.',
       status: 'idle',
       progress: 0,
       thoughtTrace: ['Ready to aggregate findings into report structures.'],
-      toolsAccess: ['mcp_synthesis_engine']
+      toolsAccess: ['mcp_synthesis_engine', 'mcp_pdf_report_generator']
     }
   };
 }

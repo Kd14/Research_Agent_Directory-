@@ -3,6 +3,7 @@ import webGroundingTool from './webGrounding.tool';
 import specAnalyzerTool from './specAnalyzer.tool';
 import hypothesisTesterTool from './hypothesisTester.tool';
 import synthesisEngineTool from './synthesisEngine.tool';
+import pdfReportGeneratorTool from './pdfReportGenerator.tool';
 import { ToolExecutor, ToolRegistry } from './types';
 
 export * from './types';
@@ -18,6 +19,7 @@ export function createToolRegistry(): ToolRegistry {
   registry.register(specAnalyzerTool);
   registry.register(hypothesisTesterTool);
   registry.register(synthesisEngineTool);
+  registry.register(pdfReportGeneratorTool);
   return registry;
 }
 

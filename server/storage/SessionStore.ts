@@ -75,6 +75,19 @@ export class SessionStore {
     }
   }
 
+  writeBinaryArtifact(id: string, relativeName: string, content: Buffer): void {
+    fs.mkdirSync(this.artifactsDir(id), { recursive: true });
+    fs.writeFileSync(path.join(this.artifactsDir(id), relativeName), content);
+  }
+
+  readBinaryArtifact(id: string, relativeName: string): Buffer | undefined {
+    try {
+      return fs.readFileSync(path.join(this.artifactsDir(id), relativeName));
+    } catch {
+      return undefined;
+    }
+  }
+
   list(): SessionMetadata[] {
     if (!fs.existsSync(this.sessionsDir)) return [];
     return fs.readdirSync(this.sessionsDir, { withFileTypes: true })

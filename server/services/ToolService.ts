@@ -63,6 +63,17 @@ const DISPLAY_TOOLS: MCPTool[] = [
       inputs: ['sections: Array<{title: string, content: string}>', 'citations: string[]'],
       output: 'Rendered report tree with executive summary and diagrams'
     }
+  },
+  {
+    name: 'mcp_pdf_report_generator',
+    description: 'Converts the finished markdown report into a polished, paginated PDF with mermaid diagrams rendered as vector graphics via headless Chromium.',
+    category: 'Report Engine',
+    callCount: 0,
+    status: 'idle',
+    schema: {
+      inputs: ['markdown: string', 'title?: string'],
+      output: 'PDF binary document with rendered diagrams and print-ready layout'
+    }
   }
 ];
 

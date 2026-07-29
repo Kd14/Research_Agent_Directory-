@@ -2,6 +2,7 @@ import type { LLMProvider } from '../llm/LLMProvider';
 import type { PlanInput, PlannerService } from '../services/PlannerService';
 import type { ExecutionService } from '../services/ExecutionService';
 import type { SessionService } from '../services/SessionService';
+import { renderMarkdownReportToPdf } from '../services/PdfReportRenderer';
 import { ProgressEmitter } from './ProgressEmitter';
 
 export interface PipelineCallbacks {
@@ -126,8 +127,20 @@ export class ResearchPipeline {
     }
 
     this.sessionService.writeArtifact(metadata.id, 'report.md', fullReport);
-    this.sessionService.save(metadata.id, { finalReportArtifact: 'report.md', status: 'completed' });
+    this.sessionService.save(metadata.id, { finalReportArtifact: 'report.md' });
 
+    progress.emit('exporting_pdf', 'Rendering the polished PDF document with vector diagrams...');
+    try {
+      const pdf = await renderMarkdownReportToPdf({ markdown: fullReport, title: plan.title });
+      this.sessionService.writeBinaryArtifact(metadata.id, 'report.pdf', pdf);
+      this.sessionService.save(metadata.id, { finalReportPdfArtifact: 'report.pdf' });
+    } catch (err) {
+      // PDF export is a best-effort local post-processing step - a failure here shouldn't discard
+      // the already-synthesized report, so the run still completes with the markdown artifact.
+      progress.emit('pdf_export_failed', err instanceof Error ? err.message : 'PDF export failed');
+    }
+
+    this.sessionService.save(metadata.id, { status: 'completed' });
     onEvent('report', { report: fullReport });
     progress.emit('finished', 'Research complete.');
   }
