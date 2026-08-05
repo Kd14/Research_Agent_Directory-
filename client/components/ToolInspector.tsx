@@ -1,33 +1,60 @@
-import React, { useState } from 'react';
-import { 
-  Server, 
-  Zap, 
-  Cpu, 
-  Database, 
-  Globe, 
-  ShieldAlert, 
-  FileCheck, 
-  Play, 
-  CheckCircle2, 
-  Code
+import React, { useMemo, useState } from 'react';
+import {
+  Server,
+  Zap,
+  Cpu,
+  Database,
+  Globe,
+  ShieldAlert,
+  FileCheck,
+  Play,
+  CheckCircle2,
+  Code,
+  BookMarked,
+  Link2
 } from 'lucide-react';
-import { MCPTool } from '../types';
+import { CitationRecord, MCPTool, TechDocument } from '../types';
 
-interface MCPToolsInspectorProps {
+interface ToolInspectorProps {
   tools: MCPTool[];
   onExecuteToolDirect?: (toolName: string, args: Record<string, any>) => Promise<any>;
+  citations?: readonly CitationRecord[];
+  documents?: readonly TechDocument[];
 }
 
-export const MCPToolsInspector: React.FC<MCPToolsInspectorProps> = ({
+export const ToolInspector: React.FC<ToolInspectorProps> = ({
   tools,
-  onExecuteToolDirect
+  onExecuteToolDirect,
+  citations = [],
+  documents = []
 }) => {
+  const [activeSubTab, setActiveSubTab] = useState<'tools' | 'citations'>('tools');
   const [selectedToolName, setSelectedToolName] = useState<string>('mcp_spec_analyzer');
   const [testArgsJson, setTestArgsJson] = useState<string>(
     JSON.stringify({ paramCountBillion: 70, seqLen: 512000, batchSize: 2, precision: 'FP8' }, null, 2)
   );
   const [toolResult, setToolResult] = useState<any>(null);
   const [isTesting, setIsTesting] = useState<boolean>(false);
+
+  const documentTitleById = useMemo(
+    () => new Map(documents.map(d => [d.id, d.title])),
+    [documents]
+  );
+
+  const citationGroups = useMemo(() => {
+    const map = new Map<string, { key: string; label: string; records: CitationRecord[] }>();
+    for (const record of citations) {
+      const key = record.docId || record.sourceUrl || 'ungrouped';
+      const label = record.docId ? (documentTitleById.get(record.docId) || record.docId) : (record.sourceUrl || 'Other evidence');
+      let group = map.get(key);
+      if (!group) {
+        group = { key, label, records: [] };
+        map.set(key, group);
+      }
+      group.records.push(record);
+    }
+    return Array.from(map.values());
+  }, [citations, documentTitleById]);
 
   const selectedTool = tools.find(t => t.name === selectedToolName) || tools[0];
 
@@ -77,7 +104,67 @@ export const MCPToolsInspector: React.FC<MCPToolsInspectorProps> = ({
         </span>
       </div>
 
-      {/* Grid Layout */}
+      {/* Sub-tab toggle */}
+      <div className="flex items-center gap-1 rounded-lg bg-slate-900 p-1 mb-4 w-fit border border-slate-800">
+        <button
+          onClick={() => setActiveSubTab('tools')}
+          className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all ${
+            activeSubTab === 'tools' ? 'bg-slate-800 text-indigo-300' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Server className="h-3.5 w-3.5" />
+          <span>MCP Tools</span>
+        </button>
+        <button
+          onClick={() => setActiveSubTab('citations')}
+          className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all ${
+            activeSubTab === 'citations' ? 'bg-slate-800 text-indigo-300' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <BookMarked className="h-3.5 w-3.5" />
+          <span>Citations</span>
+          {citations.length > 0 && (
+            <span className="rounded-full bg-indigo-500/30 px-1.5 py-0.2 text-[10px] font-bold text-indigo-200">
+              {citations.length}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {activeSubTab === 'citations' ? (
+        <div className="space-y-3">
+          {citationGroups.length === 0 && (
+            <div className="py-12 text-center text-slate-600 italic">
+              No citations recorded yet. Run a research session that uses mcp_doc_search or mcp_web_grounding to populate the citation graph.
+            </div>
+          )}
+          {citationGroups.map(group => (
+            <div key={group.key} className="rounded-xl border border-slate-800 bg-slate-900/60 p-3.5">
+              <div className="flex items-center gap-2 mb-2">
+                <Link2 className="h-3.5 w-3.5 text-indigo-400" />
+                <span className="text-xs font-bold text-slate-100">{group.label}</span>
+                <span className="text-[10px] text-slate-500 font-mono">· {group.records.length} citation{group.records.length === 1 ? '' : 's'}</span>
+              </div>
+              <div className="space-y-2">
+                {group.records.map(record => (
+                  <div key={record.id} className="rounded-lg bg-slate-950 border border-slate-800 p-2.5">
+                    <p className="text-[11px] text-slate-300 leading-relaxed">{record.claim}</p>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[9.5px] font-mono text-slate-500">
+                      {record.toolName && (
+                        <span className="rounded bg-amber-500/10 px-1.5 py-0.2 text-amber-300 border border-amber-500/20">{record.toolName}</span>
+                      )}
+                      {record.consumedBy.map(stepId => (
+                        <span key={stepId} className="rounded bg-slate-800 px-1.5 py-0.2 text-slate-400">used by {stepId}</span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
         {/* Tools List */}
@@ -190,6 +277,7 @@ export const MCPToolsInspector: React.FC<MCPToolsInspectorProps> = ({
         </div>
 
       </div>
+      )}
     </div>
   );
 };

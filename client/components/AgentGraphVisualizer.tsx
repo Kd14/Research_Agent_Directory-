@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
-import { 
-  Bot, 
-  Server, 
-  Activity, 
-  Cpu, 
-  BookOpen, 
-  ShieldCheck, 
-  FileCheck2, 
-  Zap, 
+import {
+  Bot,
+  Server,
+  Activity,
+  Cpu,
+  BookOpen,
+  ShieldCheck,
+  FileCheck2,
+  Zap,
   ArrowRight,
   CheckCircle2,
   XCircle,
@@ -39,8 +39,10 @@ export const AgentGraphVisualizer: React.FC<AgentGraphVisualizerProps> = ({
   const selectedAgent = agents[selectedAgentId] || agents['lead'];
 
   // Only render nodes for agents actually deployed in this session (the
-  // user can opt specialists out before starting a run).
-  const activeSpecialistIds = ['literature', 'pipeline', 'validation', 'synthesis'].filter(id => agents[id]);
+  // user can opt specialists out before starting a run). Critic/Reviewer are pipeline-stage
+  // personas (server/orchestration/PipelineStageRoster.ts) rather than domain specialists - they
+  // run on every session, so they show up here whenever the session actually deployed them.
+  const activeSpecialistIds = ['literature', 'pipeline', 'validation', 'synthesis', 'critic', 'reviewer'].filter(id => agents[id]);
 
   const getStatusBadge = (status: AgentStatus, isCurrentStep: boolean) => {
     if (isCurrentStep && isExecuting) {

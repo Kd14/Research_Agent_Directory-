@@ -18,12 +18,14 @@ export interface TechDocument {
   contentHash?: string;
 }
 
-export type AgentRole = 
+export type AgentRole =
   | 'lead'
   | 'literature'
   | 'pipeline'
   | 'validation'
-  | 'synthesis';
+  | 'synthesis'
+  | 'critic'
+  | 'reviewer';
 
 export type AgentStatus = 
   | 'idle' 
@@ -91,6 +93,17 @@ export interface MCPLogEntry {
   level: LogLevel;
 }
 
+export interface CitationRecord {
+  id: string;
+  toolName?: string;
+  docId?: string;
+  chunkId?: string;
+  sourceUrl?: string;
+  claim: string;
+  consumedBy: string[];
+  createdAt: string;
+}
+
 export type ExecutionMode = 'auto' | 'step_by_step' | 'paused';
 
 export interface ResearchSession {
@@ -105,6 +118,7 @@ export interface ResearchSession {
   finalReport?: string;
   logs: MCPLogEntry[];
   agents: Record<string, AgentNode>;
+  citations: CitationRecord[];
   createdAt: string;
   updatedAt: string;
 }

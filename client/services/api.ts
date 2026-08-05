@@ -46,41 +46,40 @@ export async function executeMcpTool(toolName: string, args: Record<string, any>
   }));
 }
 
-// --- Research ---
+// --- Research (SSE - see client/hooks/useResearchPipeline.ts for stream consumption) ---
 
-export async function planResearch(userPrompt: string, docIds: string[], activeAgentIds: string[]) {
-  return json(await fetch('/api/research/plan', {
-    method: 'POST',
+// PATCH the persisted instructionSet and/or currentStepIndex on a paused session so a subsequent
+// resume() picks up the edit (the pipeline reads persisted history, never anything client-held).
+export async function patchInstructionSet(
+  sessionId: string,
+  patch: { instructionSet?: InstructionStep[]; currentStepIndex?: number }
+) {
+  return json(await fetch(`/api/sessions/${sessionId}/instruction-set`, {
+    method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userPrompt, docIds, activeAgentIds })
+    body: JSON.stringify(patch)
   }));
 }
 
-export async function executeResearchStep(
-  step: InstructionStep,
-  selectedDocIds: string[],
-  userFeedback: string | undefined,
-  sessionId: string
-) {
-  return json(await fetch('/api/research/execute-step', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ step, selectedDocIds, userFeedback, sessionId })
-  }));
-}
+// --- Standalone Document/PDF Converter ---
 
-export async function synthesizeReport(
-  userPrompt: string,
-  instructionSet: InstructionStep[],
-  agentOutputs: Record<string, string>,
-  selectedDocIds: string[],
-  sessionId: string
-) {
-  return json(await fetch('/api/research/synthesize', {
+// Returns the raw PDF Blob directly (not JSON) - this hits the standalone /api/tools/pdf-convert
+// endpoint, independent of any research session.
+export async function convertMarkdownToPdf(
+  markdown: string,
+  title?: string,
+  renderDiagramsWithLlm?: boolean
+): Promise<Blob> {
+  const res = await fetch('/api/tools/pdf-convert', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userPrompt, instructionSet, agentOutputs, selectedDocIds, sessionId })
-  }));
+    body: JSON.stringify({ markdown, title, renderDiagramsWithLlm })
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || 'PDF conversion failed');
+  }
+  return res.blob();
 }
 
 // --- Sessions ---
@@ -107,4 +106,24 @@ export async function duplicateSession(sessionId: string) {
 
 export async function deleteSession(sessionId: string) {
   return json(await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' }));
+}
+
+// --- Preferences ---
+
+export interface UserPreferences {
+  theme?: 'light' | 'dark' | 'system';
+  defaultAgentIds?: string[];
+  reflectionEnabled?: boolean;
+}
+
+export async function fetchPreferences(): Promise<{ preferences: UserPreferences }> {
+  return json(await fetch('/api/preferences'));
+}
+
+export async function savePreferences(patch: UserPreferences): Promise<{ success: boolean; preferences: UserPreferences }> {
+  return json(await fetch('/api/preferences', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch)
+  }));
 }

@@ -1,1 +1,5 @@
 @import "tailwindcss";
+
+/* Lets `dark:` classes be driven by a `.dark` class on <html> (see client/hooks/usePreferences.ts)
+   instead of only ever following the OS-level prefers-color-scheme media query. */
+@custom-variant dark (&:where(.dark, .dark *));

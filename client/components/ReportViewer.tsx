@@ -1,16 +1,19 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { 
-  FileText, 
-  Copy, 
-  Check, 
-  Download, 
-  Share2, 
-  Sparkles, 
-  MessageSquare, 
+import {
+  FileText,
+  Copy,
+  Check,
+  Download,
+  Share2,
+  Sparkles,
+  MessageSquare,
   ArrowLeft,
-  Printer
+  Printer,
+  ChevronDown,
+  Presentation,
+  Quote
 } from 'lucide-react';
 
 interface ReportViewerProps {
@@ -33,6 +36,18 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
   const [copied, setCopied] = useState<boolean>(false);
   const [followUpText, setFollowUpText] = useState<string>('');
   const [pdfStatus, setPdfStatus] = useState<'idle' | 'loading' | 'error'>('idle');
+  const [exportStatus, setExportStatus] = useState<'idle' | 'loading' | 'error'>('idle');
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) setExportMenuOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [exportMenuOpen]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(reportMarkdown);
@@ -40,7 +55,30 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const pdfFileName = `${(sessionTitle || 'research_report').toLowerCase().replace(/\s+/g, '_')}.pdf`;
+  const baseFileName = (sessionTitle || 'research_report').toLowerCase().replace(/\s+/g, '_');
+  const pdfFileName = `${baseFileName}.pdf`;
+
+  const downloadSessionArtifact = async (path: string, fileName: string) => {
+    if (!sessionId) return;
+    setExportMenuOpen(false);
+    setExportStatus('loading');
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/${path}`);
+      if (!res.ok) throw new Error('Export not available');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', fileName);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      setExportStatus('idle');
+    } catch {
+      setExportStatus('error');
+    }
+  };
 
   const handleDownloadPdf = async () => {
     if (!sessionId) return;
@@ -128,12 +166,73 @@ export const ReportViewer: React.FC<ReportViewerProps> = ({
             <Download className="h-3.5 w-3.5" />
             <span>{pdfStatus === 'loading' ? 'Rendering PDF…' : 'Export PDF Report'}</span>
           </button>
+
+          {sessionId && (
+            <div className="relative" ref={exportMenuRef}>
+              <button
+                onClick={() => setExportMenuOpen(open => !open)}
+                disabled={exportStatus === 'loading'}
+                className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 disabled:opacity-50"
+                title="More export formats"
+              >
+                <span>{exportStatus === 'loading' ? 'Exporting…' : 'More Exports'}</span>
+                <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+
+              {exportMenuOpen && (
+                <div className="absolute right-0 z-10 mt-1 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 text-xs shadow-lg dark:border-slate-700 dark:bg-slate-900">
+                  <button
+                    onClick={() => downloadSessionArtifact('report.docx', `${baseFileName}.docx`)}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                  >
+                    <FileText className="h-3.5 w-3.5" />
+                    <span>Export DOCX</span>
+                  </button>
+                  <button
+                    onClick={() => downloadSessionArtifact('report.pptx', `${baseFileName}.pptx`)}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                  >
+                    <Presentation className="h-3.5 w-3.5" />
+                    <span>Export Presentation Outline</span>
+                  </button>
+                  <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+                  <button
+                    onClick={() => downloadSessionArtifact('citations.json', `${baseFileName}_citations.json`)}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                  >
+                    <Quote className="h-3.5 w-3.5" />
+                    <span>Citation Graph (JSON)</span>
+                  </button>
+                  <button
+                    onClick={() => downloadSessionArtifact('citations.csv', `${baseFileName}_citations.csv`)}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                  >
+                    <Quote className="h-3.5 w-3.5" />
+                    <span>Citation Graph (CSV)</span>
+                  </button>
+                  <button
+                    onClick={() => downloadSessionArtifact('citations.md', `${baseFileName}_citations.md`)}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                  >
+                    <Quote className="h-3.5 w-3.5" />
+                    <span>Citation Graph (Markdown)</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
       {pdfStatus === 'error' && (
         <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300">
           The polished PDF isn't ready for this session yet (it's generated automatically right after synthesis). Try again in a moment, or re-run synthesis.
+        </div>
+      )}
+
+      {exportStatus === 'error' && (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300">
+          That export isn't ready for this session yet. DOCX/PPTX are generated automatically right after synthesis - try again in a moment, or re-run synthesis.
         </div>
       )}
 

@@ -1,4 +1,4 @@
-import type { AgentNode, InstructionStep, MCPLogEntry, ResearchSession } from '../types';
+import type { AgentNode, CitationRecord, InstructionStep, MCPLogEntry, ResearchSession } from '../types';
 
 export interface ActiveToolCall {
   toolName: string;
@@ -14,7 +14,7 @@ export interface ResearchState {
   currentStepIndex: number;
   agentOutputs: Record<string, string>;
   activeToolCall: ActiveToolCall | undefined;
-  /** Latest SSE progress-phase message from a streaming run (Phase 12 builds the visual indicator). */
+  /** Latest SSE progress-phase message from the streaming run. */
   currentPhaseMessage: string | null;
   /** Accumulates token deltas from a streaming synthesis before the final 'report' event arrives. */
   streamingReportText: string;
@@ -33,41 +33,29 @@ export const initialResearchState: ResearchState = {
   streamingReportText: ''
 };
 
+function logEntry(partial: Omit<MCPLogEntry, 'id' | 'timestamp'>): MCPLogEntry {
+  return {
+    id: `log_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    timestamp: new Date().toLocaleTimeString(),
+    ...partial
+  };
+}
+
 export type ResearchAction =
-  | { type: 'PLAN_STARTED' }
-  | { type: 'PLAN_SUCCEEDED'; session: ResearchSession }
-  | { type: 'PLAN_FAILED'; error: string }
-  | { type: 'PLAN_SETTLED' }
-  | { type: 'UPDATE_AGENT'; agentId: string; updates: Partial<AgentNode> }
-  | { type: 'ADD_LOG'; entry: MCPLogEntry }
-  | { type: 'SET_ACTIVE_TOOL_CALL'; toolCall: ActiveToolCall | undefined }
-  | { type: 'SET_AGENT_OUTPUT'; stepId: string; output: string }
-  | { type: 'UPDATE_STEP_RESULT'; stepIdx: number; outputSummary?: string }
-  | { type: 'STEP_FAILED'; error: string }
-  | { type: 'ADVANCE_STEP' }
-  | { type: 'SYNTHESIS_SUCCEEDED'; report: string }
-  | { type: 'SYNTHESIS_FAILED'; error: string }
   | { type: 'TOGGLE_PAUSE' }
-  | { type: 'SET_PAUSED'; paused: boolean }
-  | { type: 'SET_EXECUTING'; executing: boolean }
-  | { type: 'SET_STEP_INDEX'; index: number }
   | { type: 'DISMISS_ERROR' }
-  | { type: 'UPDATE_STEP'; step: InstructionStep }
-  | { type: 'ADD_STEP'; step: InstructionStep }
-  | { type: 'DELETE_STEP'; stepId: string }
+  | { type: 'SET_INSTRUCTION_SET'; instructionSet: InstructionStep[] }
   | { type: 'CLEAR_LOGS' }
   | { type: 'RESET' }
+  | { type: 'STREAM_STARTED' }
+  | { type: 'STREAM_SESSION_CREATED'; session: ResearchSession }
   | {
-      type: 'RESUMED';
+      type: 'STREAM_RESUMED';
       session: ResearchSession;
       agentOutputs: Record<string, string>;
       currentStepIndex: number;
-      isExecuting: boolean;
-      isPaused: boolean;
     }
-  | { type: 'STREAM_STARTED' }
-  | { type: 'STREAM_SESSION_CREATED'; session: ResearchSession }
-  | { type: 'STREAM_PROGRESS'; message: string }
+  | { type: 'STREAM_PROGRESS'; phase: string; message: string; stepIndex?: number; stepTitle?: string }
   | {
       type: 'STREAM_STEP_RESULT';
       stepIndex: number;
@@ -75,6 +63,10 @@ export type ResearchAction =
       thoughtTrace: string[];
       agentOutput: string;
       keyTakeaways: string[];
+      toolCallUsed?: string | null;
+      toolArgs?: Record<string, unknown>;
+      toolResult?: unknown;
+      citations?: readonly CitationRecord[];
     }
   | { type: 'STREAM_TOKEN'; textDelta: string }
   | { type: 'STREAM_REPORT_DONE'; report: string }
@@ -82,112 +74,15 @@ export type ResearchAction =
 
 export function researchReducer(state: ResearchState, action: ResearchAction): ResearchState {
   switch (action.type) {
-    case 'PLAN_STARTED':
-      return {
-        ...state,
-        isPlanning: true,
-        session: null,
-        agentOutputs: {},
-        currentStepIndex: 0,
-        errorMessage: null
-      };
-
-    case 'PLAN_SUCCEEDED':
-      return { ...state, session: action.session, isExecuting: true, isPaused: false };
-
-    case 'PLAN_FAILED':
-      return { ...state, errorMessage: action.error };
-
-    case 'PLAN_SETTLED':
-      return { ...state, isPlanning: false };
-
-    case 'UPDATE_AGENT': {
-      if (!state.session || !state.session.agents[action.agentId]) return state;
-      const currentAgent = state.session.agents[action.agentId];
-      return {
-        ...state,
-        session: {
-          ...state.session,
-          agents: {
-            ...state.session.agents,
-            [action.agentId]: { ...currentAgent, ...action.updates }
-          }
-        }
-      };
-    }
-
-    case 'ADD_LOG': {
-      if (!state.session) return state;
-      return { ...state, session: { ...state.session, logs: [...state.session.logs, action.entry] } };
-    }
-
-    case 'SET_ACTIVE_TOOL_CALL':
-      return { ...state, activeToolCall: action.toolCall };
-
-    case 'SET_AGENT_OUTPUT':
-      return { ...state, agentOutputs: { ...state.agentOutputs, [action.stepId]: action.output } };
-
-    case 'UPDATE_STEP_RESULT': {
-      if (!state.session) return state;
-      const updatedSteps = [...state.session.instructionSet];
-      updatedSteps[action.stepIdx] = {
-        ...updatedSteps[action.stepIdx],
-        status: 'completed',
-        outputSummary: action.outputSummary
-      };
-      return { ...state, session: { ...state.session, instructionSet: updatedSteps } };
-    }
-
-    case 'STEP_FAILED':
-      return { ...state, errorMessage: action.error, isPaused: true };
-
-    case 'ADVANCE_STEP':
-      return { ...state, currentStepIndex: state.currentStepIndex + 1 };
-
-    case 'SYNTHESIS_SUCCEEDED': {
-      if (!state.session) return state;
-      return {
-        ...state,
-        session: { ...state.session, status: 'completed', finalReport: action.report },
-        isExecuting: false
-      };
-    }
-
-    case 'SYNTHESIS_FAILED':
-      return { ...state, errorMessage: action.error, isExecuting: false };
-
     case 'TOGGLE_PAUSE':
       return { ...state, isPaused: !state.isPaused };
-
-    case 'SET_PAUSED':
-      return { ...state, isPaused: action.paused };
-
-    case 'SET_EXECUTING':
-      return { ...state, isExecuting: action.executing };
-
-    case 'SET_STEP_INDEX':
-      return { ...state, currentStepIndex: action.index };
 
     case 'DISMISS_ERROR':
       return { ...state, errorMessage: null };
 
-    case 'UPDATE_STEP': {
+    case 'SET_INSTRUCTION_SET': {
       if (!state.session) return state;
-      const newSteps = state.session.instructionSet.map(s => (s.id === action.step.id ? action.step : s));
-      return { ...state, session: { ...state.session, instructionSet: newSteps } };
-    }
-
-    case 'ADD_STEP': {
-      if (!state.session) return state;
-      return { ...state, session: { ...state.session, instructionSet: [...state.session.instructionSet, action.step] } };
-    }
-
-    case 'DELETE_STEP': {
-      if (!state.session) return state;
-      return {
-        ...state,
-        session: { ...state.session, instructionSet: state.session.instructionSet.filter(s => s.id !== action.stepId) }
-      };
+      return { ...state, session: { ...state.session, instructionSet: action.instructionSet } };
     }
 
     case 'CLEAR_LOGS': {
@@ -198,17 +93,6 @@ export function researchReducer(state: ResearchState, action: ResearchAction): R
     case 'RESET':
       return { ...initialResearchState };
 
-    case 'RESUMED':
-      return {
-        ...state,
-        session: action.session,
-        agentOutputs: action.agentOutputs,
-        currentStepIndex: action.currentStepIndex,
-        isExecuting: action.isExecuting,
-        isPaused: action.isPaused,
-        errorMessage: null
-      };
-
     case 'STREAM_STARTED':
       return {
         ...initialResearchState,
@@ -218,14 +102,57 @@ export function researchReducer(state: ResearchState, action: ResearchAction): R
     case 'STREAM_SESSION_CREATED':
       return {
         ...state,
-        session: action.session,
+        session: { ...action.session, citations: action.session.citations || [] },
         isPlanning: false,
         isExecuting: true,
-        isPaused: false
+        isPaused: false,
+        currentStepIndex: 0,
+        agentOutputs: {}
       };
 
-    case 'STREAM_PROGRESS':
-      return { ...state, currentPhaseMessage: action.message };
+    case 'STREAM_RESUMED':
+      return {
+        ...state,
+        session: { ...action.session, citations: action.session.citations || [] },
+        agentOutputs: action.agentOutputs,
+        currentStepIndex: action.currentStepIndex,
+        isPlanning: false,
+        isExecuting: true,
+        isPaused: false,
+        errorMessage: null
+      };
+
+    case 'STREAM_PROGRESS': {
+      const withMessage = { ...state, currentPhaseMessage: action.message };
+      if (!state.session || action.phase === 'error') return withMessage;
+
+      const step = action.stepIndex !== undefined ? state.session.instructionSet[action.stepIndex] : undefined;
+      const isLiveAgentPhase = action.phase === 'running_tools' || action.phase === 'analyzing' ||
+        action.phase === 'critiquing' || action.phase === 'reviewing';
+
+      const entry = logEntry({
+        agentId: step?.assignedAgentId,
+        agentName: step?.agentName || 'Dr. Astra (Lead Orchestrator)',
+        type: 'orchestrator_decision',
+        message: action.message,
+        level: 'info'
+      });
+
+      const agents = step && isLiveAgentPhase && withMessage.session!.agents[step.assignedAgentId]
+        ? {
+            ...withMessage.session!.agents,
+            [step.assignedAgentId]: {
+              ...withMessage.session!.agents[step.assignedAgentId],
+              status: action.phase === 'running_tools' ? 'calling_tool' as const : 'analyzing' as const
+            }
+          }
+        : withMessage.session!.agents;
+
+      return {
+        ...withMessage,
+        session: { ...withMessage.session!, logs: [...withMessage.session!.logs, entry], agents }
+      };
+    }
 
     case 'STREAM_STEP_RESULT': {
       if (!state.session) return state;
@@ -239,11 +166,34 @@ export function researchReducer(state: ResearchState, action: ResearchAction): R
         outputSummary: action.keyTakeaways?.join('; ')
       };
 
+      const newLogs = [...state.session.logs];
+      if (action.toolCallUsed) {
+        newLogs.push(logEntry({
+          agentId: action.agentId,
+          agentName: step.agentName,
+          type: 'mcp_tool_call',
+          toolName: action.toolCallUsed,
+          args: action.toolArgs,
+          result: action.toolResult,
+          message: `Invoked MCP tool ${action.toolCallUsed}`,
+          level: 'mcp_tool'
+        }));
+      }
+      newLogs.push(logEntry({
+        agentId: action.agentId,
+        agentName: step.agentName,
+        type: 'agent_message',
+        message: `Step ${action.stepIndex + 1} finalized: ${action.keyTakeaways?.[0] || 'Analysis complete.'}`,
+        level: 'success'
+      }));
+
       return {
         ...state,
         session: {
           ...state.session,
           instructionSet: updatedSteps,
+          logs: newLogs,
+          citations: action.citations?.length ? [...(state.session.citations || []), ...action.citations] : (state.session.citations || []),
           agents: state.session.agents[action.agentId]
             ? {
                 ...state.session.agents,
@@ -258,7 +208,8 @@ export function researchReducer(state: ResearchState, action: ResearchAction): R
             : state.session.agents
         },
         agentOutputs: { ...state.agentOutputs, [step.id]: action.agentOutput },
-        currentStepIndex: action.stepIndex + 1
+        currentStepIndex: action.stepIndex + 1,
+        activeToolCall: undefined
       };
     }
 

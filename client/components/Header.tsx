@@ -1,25 +1,27 @@
 import React from 'react';
-import { 
-  Bot, 
-  Server, 
-  FileText, 
-  Activity, 
-  Sliders, 
-  Play, 
-  Pause, 
-  RotateCcw, 
+import {
+  Bot,
+  Server,
+  FileText,
+  Activity,
+  Play,
+  Pause,
+  RotateCcw,
   Sparkles,
   Zap,
   CheckCircle2,
   AlertCircle,
-  Download
+  Download,
+  FileCode2
 } from 'lucide-react';
 import { SystemStats } from '../types';
+import type { UserPreferences } from '../services/api';
 import { SessionMenu } from './SessionMenu';
+import { SettingsDialog } from './SettingsDialog';
 
 interface HeaderProps {
-  activeTab: 'research' | 'documents' | 'mcp_tools' | 'report';
-  setActiveTab: (tab: 'research' | 'documents' | 'mcp_tools' | 'report') => void;
+  activeTab: 'research' | 'documents' | 'mcp_tools' | 'report' | 'pdf_studio';
+  setActiveTab: (tab: 'research' | 'documents' | 'mcp_tools' | 'report' | 'pdf_studio') => void;
   stats: SystemStats;
   isExecuting: boolean;
   isPaused: boolean;
@@ -28,6 +30,8 @@ interface HeaderProps {
   onResumeSession: (sessionId: string) => void;
   hasReport: boolean;
   selectedDocCount: number;
+  preferences: UserPreferences;
+  onSavePreferences: (patch: UserPreferences) => Promise<UserPreferences>;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -40,7 +44,9 @@ export const Header: React.FC<HeaderProps> = ({
   onResetSession,
   onResumeSession,
   hasReport,
-  selectedDocCount
+  selectedDocCount,
+  preferences,
+  onSavePreferences
 }) => {
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/90 backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/90">
@@ -115,6 +121,19 @@ export const Header: React.FC<HeaderProps> = ({
             <span>MCP Tools</span>
           </button>
 
+          <button
+            id="tab-pdf-studio"
+            onClick={() => setActiveTab('pdf_studio')}
+            className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-medium transition-all ${
+              activeTab === 'pdf_studio'
+                ? 'bg-white text-indigo-600 shadow-sm dark:bg-slate-900 dark:text-indigo-400'
+                : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'
+            }`}
+          >
+            <FileCode2 className="h-3.5 w-3.5" />
+            <span>PDF Studio</span>
+          </button>
+
           {hasReport && (
             <button
               id="tab-report"
@@ -162,6 +181,8 @@ export const Header: React.FC<HeaderProps> = ({
             <Download className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
             <span className="hidden sm:inline">Export ZIP</span>
           </a>
+
+          <SettingsDialog preferences={preferences} onSave={onSavePreferences} />
 
           <SessionMenu onResumeSession={onResumeSession} />
 

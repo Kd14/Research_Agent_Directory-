@@ -25,7 +25,7 @@ interface DirectoryInputProps extends React.InputHTMLAttributes<HTMLInputElement
 }
 const DirectoryInput = (props: DirectoryInputProps) => <input {...props} />;
 
-interface DocumentManagerProps {
+interface DocumentPanelProps {
   documents: TechDocument[];
   selectedDocIds: string[];
   onToggleDocSelection: (docId: string) => void;
@@ -35,7 +35,7 @@ interface DocumentManagerProps {
   onDeleteDocument: (docId: string) => void;
 }
 
-export const DocumentManager: React.FC<DocumentManagerProps> = ({
+export const DocumentPanel: React.FC<DocumentPanelProps> = ({
   documents,
   selectedDocIds,
   onToggleDocSelection,
