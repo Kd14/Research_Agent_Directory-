@@ -18,6 +18,11 @@ describe('loadConfig', () => {
       expect(result.value.llm.apiKey).toBe('test-key');
       expect(result.value.llm.model).toBe('gemini-3.6-flash');
       expect(result.value.sessionsDir.endsWith('data/sessions')).toBe(true);
+      expect(result.value.reflection.enabled).toBe(true);
+      expect(result.value.reflection.maxIterations).toBe(2);
+      expect(result.value.reflection.confidenceThreshold).toBe(0.6);
+      expect(result.value.standby.pollIntervalMs).toBe(15_000);
+      expect(result.value.standby.maxWaitMs).toBe(0);
     }
   });
 

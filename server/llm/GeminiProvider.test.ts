@@ -34,6 +34,9 @@ const testConfig: AppConfig = {
   documents: { watchDir: undefined },
   search: { rerankEnabled: false, bm25Weight: 0.5, embeddingWeight: 0.5 },
   logging: { level: 'info', logPrompts: false, logDir: '/tmp/data/logs' },
+  reflection: { enabled: true, maxIterations: 2, confidenceThreshold: 0.6 },
+  memory: { researchCacheTtlMs: 86400000 },
+  standby: { pollIntervalMs: 15000, maxWaitMs: 0 },
 };
 
 describe('GeminiProvider.generate', () => {

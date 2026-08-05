@@ -34,6 +34,21 @@ export interface AppConfig {
     readonly logPrompts: boolean;
     readonly logDir: string;
   };
+  readonly reflection: {
+    readonly enabled: boolean;
+    readonly maxIterations: number;
+    readonly confidenceThreshold: number;
+  };
+  readonly memory: {
+    readonly researchCacheTtlMs: number;
+  };
+  readonly standby: {
+    /** How often to re-check LLM availability while an agent is standing by. */
+    readonly pollIntervalMs: number;
+    /** Total time an agent will keep standing by before giving up and surfacing the error - 0 means
+     *  keep retrying indefinitely (bounded only by the caller cancelling the run). */
+    readonly maxWaitMs: number;
+  };
 }
 
 function parseIntEnv(value: string | undefined, fallback: number): number {
@@ -91,6 +106,18 @@ export function loadConfig(env: NodeJS.ProcessEnv): Result<AppConfig, Configurat
       level: (env.LOG_LEVEL as AppConfig['logging']['level']) || 'info',
       logPrompts: parseBoolEnv(env.LOG_PROMPTS, false),
       logDir: path.join(dataDir, 'logs'),
+    },
+    reflection: {
+      enabled: parseBoolEnv(env.REFLECTION_ENABLED, true),
+      maxIterations: parseIntEnv(env.REFLECTION_MAX_ITERATIONS, 2),
+      confidenceThreshold: parseFloatEnv(env.REFLECTION_CONFIDENCE_THRESHOLD, 0.6),
+    },
+    memory: {
+      researchCacheTtlMs: parseIntEnv(env.MEMORY_RESEARCH_CACHE_TTL_MS, 24 * 60 * 60 * 1000),
+    },
+    standby: {
+      pollIntervalMs: parseIntEnv(env.LLM_STANDBY_POLL_INTERVAL_MS, 15_000),
+      maxWaitMs: parseIntEnv(env.LLM_STANDBY_MAX_WAIT_MS, 0),
     },
   };
 

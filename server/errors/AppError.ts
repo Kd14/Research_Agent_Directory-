@@ -45,6 +45,11 @@ export class ExecutionError extends AppError {
   }
 }
 
+export class ReflectionError extends AppError {
+  readonly code = 'REFLECTION_ERROR';
+  readonly httpStatus = 502;
+}
+
 export class ConfigurationError extends AppError {
   readonly code = 'CONFIGURATION_ERROR';
   readonly httpStatus = 500;
