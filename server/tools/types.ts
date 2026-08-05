@@ -1,5 +1,5 @@
 import type { FunctionDeclaration } from '@google/genai';
-import type { TechDocument } from '../../client/types';
+import type { CitationRecord, TechDocument } from '../../client/types';
 import { ToolError, type ValidationError } from '../errors/AppError';
 import { Err, type Result } from '../result';
 import type { LLMProvider } from '../llm/LLMProvider';
@@ -11,10 +11,17 @@ export interface ToolExample {
   readonly description: string;
 }
 
+/** A tool reports a piece of evidence it produced; ExecutionService fills in id/createdAt/consumedBy. */
+export type RecordCitationInput = Omit<CitationRecord, 'id' | 'createdAt' | 'consumedBy'>;
+
 export interface ToolExecutionContext {
   readonly documents: readonly TechDocument[];
   readonly llmProvider: LLMProvider;
   readonly searchIndexService?: SearchIndexService;
+  /** Best-effort citation-graph capture (server/services/ExecutionService.ts) - optional so tools
+   *  invoked outside the research pipeline (e.g. the MCP Tools Inspector's direct-execute path) don't
+   *  need a no-op stub. */
+  readonly recordCitation?: (record: RecordCitationInput) => void;
 }
 
 export interface ToolDefinition<TArgs = Record<string, unknown>, TResult = unknown> {
@@ -26,6 +33,10 @@ export interface ToolDefinition<TArgs = Record<string, unknown>, TResult = unkno
   readonly examples: readonly ToolExample[];
   /** False for tools with no real Gemini function declaration (e.g. report-only stubs). Defaults to true. */
   readonly supportsFunctionCalling?: boolean;
+  /** False for tools whose result shouldn't be memoized by MemoryService (non-idempotent-in-spirit
+   *  report generators, or anything whose output should always reflect the latest input state even
+   *  when called with identical-looking args). Defaults to true. */
+  readonly cacheable?: boolean;
   validate(args: unknown): Result<TArgs, ValidationError>;
   execute(args: TArgs, ctx: ToolExecutionContext): Promise<Result<TResult, ToolError>>;
 }

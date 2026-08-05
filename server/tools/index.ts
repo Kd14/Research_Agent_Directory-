@@ -4,6 +4,10 @@ import specAnalyzerTool from './specAnalyzer.tool';
 import hypothesisTesterTool from './hypothesisTester.tool';
 import synthesisEngineTool from './synthesisEngine.tool';
 import pdfReportGeneratorTool from './pdfReportGenerator.tool';
+import documentPdfConverterTool from './documentPdfConverter.tool';
+import htmlReportExporterTool from './htmlReportExporter.tool';
+import docxReportGeneratorTool from './docxReportGenerator.tool';
+import presentationOutlineGeneratorTool from './presentationOutlineGenerator.tool';
 import { ToolExecutor, ToolRegistry } from './types';
 
 export * from './types';
@@ -20,6 +24,10 @@ export function createToolRegistry(): ToolRegistry {
   registry.register(hypothesisTesterTool);
   registry.register(synthesisEngineTool);
   registry.register(pdfReportGeneratorTool);
+  registry.register(documentPdfConverterTool);
+  registry.register(htmlReportExporterTool);
+  registry.register(docxReportGeneratorTool);
+  registry.register(presentationOutlineGeneratorTool);
   return registry;
 }
 

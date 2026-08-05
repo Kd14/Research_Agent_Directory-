@@ -55,11 +55,18 @@ const webGroundingTool: ToolDefinition<WebGroundingArgs, unknown> = {
       });
     }
 
-    return Ok({
-      searchQuery,
-      summary: result.value.text,
-      sources: (result.value.groundingSources || []).map(s => ({ title: s.title, url: s.url }))
-    });
+    const sources = (result.value.groundingSources || []).map(s => ({ title: s.title, url: s.url }));
+
+    for (const s of sources) {
+      if (!s.url) continue;
+      ctx.recordCitation?.({
+        toolName: 'mcp_web_grounding',
+        sourceUrl: s.url,
+        claim: s.title || s.url
+      });
+    }
+
+    return Ok({ searchQuery, summary: result.value.text, sources });
   }
 };
 

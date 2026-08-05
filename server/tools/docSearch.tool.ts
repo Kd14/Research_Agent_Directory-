@@ -50,6 +50,16 @@ const docSearchTool: ToolDefinition<DocSearchArgs, unknown> = {
     }
 
     const results = await ctx.searchIndexService.search(args.query, { docIds: args.docIds, topK: args.topK });
+
+    for (const r of results) {
+      ctx.recordCitation?.({
+        toolName: 'mcp_doc_search',
+        docId: r.docId,
+        chunkId: r.chunkId,
+        claim: r.chunkText.slice(0, 200)
+      });
+    }
+
     return Ok({ query: args.query, matchesFound: results.length, results });
   }
 };

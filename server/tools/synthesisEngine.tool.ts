@@ -9,7 +9,7 @@ interface SynthesisEngineArgs {
 }
 
 // No real implementation exists yet - this mirrors the pre-refactor stub fallback exactly.
-// Real synthesis is handled separately by /api/research/synthesize.
+// Real synthesis is handled separately by ResearchPipeline's streamed synthesis (POST /api/research/run|resume).
 const synthesisEngineTool: ToolDefinition<SynthesisEngineArgs, unknown> = {
   name: 'mcp_synthesis_engine',
   description: 'Compiles multi-agent outputs, code snippets, and citations into a unified technical report markdown structure.',
@@ -32,11 +32,12 @@ const synthesisEngineTool: ToolDefinition<SynthesisEngineArgs, unknown> = {
   },
   // Never had a real Gemini function declaration pre-refactor; not offered for function-calling.
   supportsFunctionCalling: false,
+  cacheable: false,
   examples: [
     {
       input: { sections: [], citations: [] },
       output: { status: 'executed', tool: 'mcp_synthesis_engine', args: {} },
-      description: 'Stub tool with no real implementation; real synthesis happens via /api/research/synthesize.'
+      description: 'Stub tool with no real implementation; real synthesis happens via ResearchPipeline.'
     }
   ],
 

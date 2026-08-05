@@ -46,6 +46,28 @@ describe('docSearchTool.execute', () => {
     expect(searchIndexService.search).toHaveBeenCalledWith('insulin glucose', { docIds: undefined, topK: 5 });
   });
 
+  it('records a citation per search result when recordCitation is provided', async () => {
+    const searchResults = [
+      { docId: 'doc1', docTitle: 'Insulin Paper', chunkId: 'doc1#0', chunkText: 'Insulin regulates glucose.', offsetStart: 0, offsetEnd: 27, bm25Score: 1, embeddingScore: 0, finalScore: 1 },
+      { docId: 'doc2', docTitle: 'Glucose Metabolism', chunkId: 'doc2#3', chunkText: 'Glucose is metabolized via glycolysis.', offsetStart: 40, offsetEnd: 80, bm25Score: 0.8, embeddingScore: 0, finalScore: 0.8 }
+    ];
+    const searchIndexService = { search: vi.fn().mockResolvedValue(searchResults) };
+    const recordCitation = vi.fn();
+
+    await docSearchTool.execute(
+      { query: 'insulin glucose', docIds: undefined, topK: 5 },
+      { ...ctx, searchIndexService: searchIndexService as any, recordCitation }
+    );
+
+    expect(recordCitation).toHaveBeenCalledTimes(2);
+    expect(recordCitation).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: 'mcp_doc_search',
+      docId: 'doc1',
+      chunkId: 'doc1#0',
+      claim: 'Insulin regulates glucose.'
+    }));
+  });
+
   it('returns empty results gracefully when no search index service is configured', async () => {
     const result = await docSearchTool.execute({ query: 'x', docIds: undefined, topK: 5 }, ctx);
     expect(result.ok).toBe(true);

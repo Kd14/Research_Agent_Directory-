@@ -12,7 +12,7 @@ interface PdfReportGeneratorArgs {
 // Deterministic post-processing step, not a Gemini function call: it converts the already-
 // synthesized markdown report (produced by the earlier LLM synthesis call) into a polished PDF
 // with mermaid diagrams rendered as real vector graphics via headless Chromium. Invoked directly
-// by ResearchPipeline/ResearchService right after synthesis completes - never offered to the LLM
+// by ResearchPipeline right after synthesis completes - never offered to the LLM
 // for function-calling, since there is no decision for the model to make here.
 const pdfReportGeneratorTool: ToolDefinition<PdfReportGeneratorArgs, Buffer> = {
   name: 'mcp_pdf_report_generator',
@@ -27,6 +27,7 @@ const pdfReportGeneratorTool: ToolDefinition<PdfReportGeneratorArgs, Buffer> = {
     required: ['markdown']
   },
   supportsFunctionCalling: false,
+  cacheable: false,
   examples: [
     {
       input: { markdown: '# Report\n\n## Architectural Diagram\n\n```mermaid\ngraph TD; A-->B;\n```', title: 'Sample Report' },
