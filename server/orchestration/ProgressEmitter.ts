@@ -4,9 +4,15 @@ export type ProgressPhase =
   | 'reading_files'
   | 'running_tools'
   | 'analyzing'
+  | 'critiquing'
   | 'synthesizing'
+  | 'reviewing'
+  | 'standby'
   | 'exporting_pdf'
   | 'pdf_export_failed'
+  | 'exporting_artifacts'
+  | 'docx_export_failed'
+  | 'pptx_export_failed'
   | 'finished'
   | 'error';
 
