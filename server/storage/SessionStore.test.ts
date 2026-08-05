@@ -26,7 +26,10 @@ const history: SessionHistory = {
   agents: {},
   logs: [],
   agentOutputs: {},
-  currentStepIndex: 0
+  currentStepIndex: 0,
+  citations: [],
+  reflections: [],
+  reflectionIterationCount: 0
 };
 
 beforeEach(() => {

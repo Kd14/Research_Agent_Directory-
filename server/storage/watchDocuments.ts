@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import type { DocumentService } from '../services/DocumentService';
+import { extractFileContent, type DocumentService } from '../services/DocumentService';
 
 const DEBOUNCE_MS = 500;
 
@@ -15,17 +15,22 @@ export function watchDocumentsDirectory(watchDir: string, documentService: Docum
 
   const pending = new Map<string, NodeJS.Timeout>();
 
-  const importFile = (filePath: string): void => {
+  const importFile = async (filePath: string): Promise<void> => {
     try {
       const stat = fs.statSync(filePath);
       if (!stat.isFile()) return;
 
-      const content = fs.readFileSync(filePath, 'utf-8');
       const fileName = path.basename(filePath);
+      const extracted = await extractFileContent(fs.readFileSync(filePath), fileName);
+      if (!extracted.ok) {
+        console.error(`[watch] Failed to import ${filePath}: ${extracted.error.message}`);
+        return;
+      }
+
       const result = documentService.createFromText({
         title: fileName,
         fileName,
-        content,
+        content: extracted.value,
         tags: ['Watched Folder']
       });
 

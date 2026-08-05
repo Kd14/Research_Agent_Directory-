@@ -1,4 +1,5 @@
-import type { AgentNode, InstructionStep, MCPLogEntry } from '../../client/types';
+import type { AgentNode, CitationRecord, InstructionStep, MCPLogEntry } from '../../client/types';
+import type { ReflectionResult } from '../services/ReflectionService';
 
 export interface SessionMetadata {
   readonly schemaVersion: 1;
@@ -19,6 +20,11 @@ export interface SessionHistory {
   logs: MCPLogEntry[];
   agentOutputs: Record<string, string>;
   currentStepIndex: number;
+  citations: CitationRecord[];
+  reflections: ReflectionResult[];
+  reflectionIterationCount: number;
   finalReportArtifact?: string;
   finalReportPdfArtifact?: string;
+  finalReportDocxArtifact?: string;
+  finalReportPptxArtifact?: string;
 }
