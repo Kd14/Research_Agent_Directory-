@@ -28,7 +28,7 @@ export function createDocumentsRouter(config: AppConfig, documentService: Docume
     res.json({ documents: documentService.list() });
   });
 
-  router.post('/api/documents/upload', upload.single('file'), (req: Request, res: Response) => {
+  router.post('/api/documents/upload', upload.single('file'), async (req: Request, res: Response) => {
     try {
       const { category, title, tags } = req.body;
       const file = req.file;
@@ -40,7 +40,7 @@ export function createDocumentsRouter(config: AppConfig, documentService: Docume
           }
         : undefined;
 
-      const result = documentService.upload(fileForService, { category, title, tags });
+      const result = await documentService.upload(fileForService, { category, title, tags });
 
       if (!result.ok) {
         return sendErrorResponse(res, result.error);

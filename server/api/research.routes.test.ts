@@ -13,7 +13,8 @@ import { ResearchPipeline } from '../orchestration/ResearchPipeline';
 import { DocumentService } from '../services/DocumentService';
 import { ExecutionService } from '../services/ExecutionService';
 import { PlannerService } from '../services/PlannerService';
-import { ResearchService } from '../services/ResearchService';
+import { MemoryService } from '../services/MemoryService';
+import { ReflectionService } from '../services/ReflectionService';
 import { SessionService } from '../services/SessionService';
 import { ToolService } from '../services/ToolService';
 import { SessionStore } from '../storage/SessionStore';
@@ -68,7 +69,10 @@ const testConfig: AppConfig = {
   upload: { maxFileSizeBytes: 20 * 1024 * 1024 },
   documents: { watchDir: undefined },
   search: { rerankEnabled: false, bm25Weight: 0.5, embeddingWeight: 0.5 },
-  logging: { level: 'info', logPrompts: false, logDir: '/tmp/data/logs' }
+  logging: { level: 'info', logPrompts: false, logDir: '/tmp/data/logs' },
+  reflection: { enabled: false, maxIterations: 2, confidenceThreshold: 0.6 },
+  memory: { researchCacheTtlMs: 86400000 },
+  standby: { pollIntervalMs: 15000, maxWaitMs: 0 }
 };
 
 const tempDirs: string[] = [];
@@ -87,13 +91,24 @@ function buildApp(llmResponse: GenerateResult) {
   tempDirs.push(sessionsDir);
   const sessionService = new SessionService(new SessionStore(sessionsDir));
 
-  const researchService = new ResearchService(plannerService, executionService, sessionService);
-  const researchPipeline = new ResearchPipeline(plannerService, executionService, sessionService, llmProvider);
+  const memoryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nexusagent-memory-'));
+  tempDirs.push(memoryDir);
+  const memoryService = new MemoryService(memoryDir, 60_000);
+
+  const reflectionService = new ReflectionService(llmProvider);
+  const researchPipeline = new ResearchPipeline(
+    plannerService,
+    executionService,
+    sessionService,
+    llmProvider,
+    reflectionService,
+    testConfig.reflection
+  );
 
   const app = express();
   app.use(express.json());
-  app.use(createApiRouter({ config: testConfig, documentService, toolService, researchService, sessionService, researchPipeline }));
-  return app;
+  app.use(createApiRouter({ config: testConfig, documentService, toolService, sessionService, researchPipeline, memoryService }));
+  return { app, sessionService };
 }
 
 afterEach(() => {
@@ -103,62 +118,9 @@ afterEach(() => {
   }
 });
 
-describe('POST /api/research/plan', () => {
-  it('returns 400 when userPrompt is missing', async () => {
-    const app = buildApp({ text: '{}' });
-    const res = await request(app).post('/api/research/plan').send({});
-    expect(res.status).toBe(400);
-  });
-
-  it('returns 200 with a session shape on success', async () => {
-    const planJson = JSON.stringify({
-      title: 'Test Session',
-      researchGoal: 'Investigate X',
-      instructionSet: [
-        {
-          stepNumber: 1,
-          assignedAgentId: 'literature',
-          agentName: 'Agent Hypatia',
-          title: 'Step 1',
-          instruction: 'Do research',
-          requiredTools: ['mcp_doc_search']
-        }
-      ]
-    });
-    const app = buildApp({ text: planJson });
-    const res = await request(app)
-      .post('/api/research/plan')
-      .send({ userPrompt: 'Test prompt', docIds: [], activeAgentIds: ['literature'] });
-
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.session.title).toBe('Test Session');
-    expect(res.body.session.instructionSet).toHaveLength(1);
-    expect(res.body.session.id).toMatch(/^session_/);
-  });
-
-  it('returns a 502 when the provider fails', async () => {
-    const app = buildApp({ text: 'not valid json' });
-    const res = await request(app)
-      .post('/api/research/plan')
-      .send({ userPrompt: 'Test prompt' });
-
-    expect(res.status).toBe(502);
-    expect(res.body.success).toBe(false);
-  });
-});
-
-describe('POST /api/research/execute-step', () => {
-  it('returns 400 when step is missing', async () => {
-    const app = buildApp({ text: '{}' });
-    const res = await request(app).post('/api/research/execute-step').send({});
-    expect(res.status).toBe(400);
-  });
-});
-
 describe('POST /api/research/run (SSE)', () => {
   it('returns 400 when userPrompt is missing', async () => {
-    const app = buildApp({ text: '{}' });
+    const { app } = buildApp({ text: '{}' });
     const res = await request(app).post('/api/research/run').send({});
     expect(res.status).toBe(400);
   });
@@ -172,7 +134,7 @@ describe('POST /api/research/run (SSE)', () => {
       researchGoal: 'Investigate Y',
       instructionSet: []
     });
-    const app = buildApp({ text: planJson });
+    const { app } = buildApp({ text: planJson });
 
     const res = await request(app)
       .post('/api/research/run')
@@ -188,11 +150,86 @@ describe('POST /api/research/run (SSE)', () => {
   });
 });
 
+describe('POST /api/research/resume/:sessionId (SSE)', () => {
+  it('continues a paused session with an empty instructionSet straight to synthesis', async () => {
+    const { app, sessionService } = buildApp({ text: 'Resumed report body.' });
+
+    const metadata = sessionService.create({
+      title: 'Paused Session',
+      userPrompt: 'Investigate Y',
+      selectedDocIds: [],
+      executionMode: 'auto'
+    });
+    sessionService.save(metadata.id, {
+      instructionSet: [],
+      agents: {},
+      logs: [],
+      agentOutputs: {},
+      currentStepIndex: 0,
+      status: 'paused'
+    } as any);
+
+    const res = await request(app).post(`/api/research/resume/${metadata.id}`).send({});
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('text/event-stream');
+    expect(res.text).toContain('event: session');
+    expect(res.text).toContain('event: report');
+    expect(res.text).toMatch(/"phase":"finished"/);
+  });
+
+  it('returns a session error event for an unknown sessionId', async () => {
+    const { app } = buildApp({ text: '{}' });
+    const res = await request(app).post('/api/research/resume/does-not-exist').send({});
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('event: error');
+  });
+});
+
+describe('PATCH /api/sessions/:id/instruction-set', () => {
+  it('persists an edited instructionSet and currentStepIndex', async () => {
+    const { app, sessionService } = buildApp({ text: '{}' });
+    const metadata = sessionService.create({
+      title: 'Editable Session',
+      userPrompt: 'Investigate Y',
+      selectedDocIds: [],
+      executionMode: 'auto'
+    });
+
+    const res = await request(app)
+      .patch(`/api/sessions/${metadata.id}/instruction-set`)
+      .send({ currentStepIndex: 2 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+
+    const loaded = sessionService.load(metadata.id);
+    expect(loaded.ok).toBe(true);
+    if (loaded.ok) expect(loaded.value.history.currentStepIndex).toBe(2);
+  });
+
+  it('returns 400 when instructionSet is not an array', async () => {
+    const { app, sessionService } = buildApp({ text: '{}' });
+    const metadata = sessionService.create({
+      title: 'Editable Session',
+      userPrompt: 'Investigate Y',
+      selectedDocIds: [],
+      executionMode: 'auto'
+    });
+
+    const res = await request(app)
+      .patch(`/api/sessions/${metadata.id}/instruction-set`)
+      .send({ instructionSet: 'not-an-array' });
+
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('GET /api/mcp/tools', () => {
-  it('returns the 6 registered tools', async () => {
-    const app = buildApp({ text: '{}' });
+  it('returns the 10 registered display tools', async () => {
+    const { app } = buildApp({ text: '{}' });
     const res = await request(app).get('/api/mcp/tools');
     expect(res.status).toBe(200);
-    expect(res.body.tools).toHaveLength(6);
+    expect(res.body.tools).toHaveLength(10);
   });
 });
