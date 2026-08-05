@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { extractText, getDocumentProxy } from 'unpdf';
 import type { TechDocument } from '../../client/types';
 import { ValidationError } from '../errors/AppError';
 import { Err, Ok, type Result } from '../result';
@@ -8,6 +9,28 @@ interface UploadedFile {
   readonly buffer: Buffer;
   readonly originalname: string;
   readonly size: number;
+}
+
+function isPdf(buffer: Buffer, fileName: string): boolean {
+  return fileName.toLowerCase().endsWith('.pdf') || buffer.subarray(0, 5).toString('latin1') === '%PDF-';
+}
+
+/** PDFs need real text extraction - decoding their compressed byte streams as UTF-8 produces garbage. */
+export async function extractFileContent(buffer: Buffer, fileName: string): Promise<Result<string, ValidationError>> {
+  if (!isPdf(buffer, fileName)) {
+    return Ok(buffer.toString('utf-8'));
+  }
+
+  try {
+    const pdf = await getDocumentProxy(new Uint8Array(buffer));
+    const { text } = await extractText(pdf, { mergePages: true });
+    if (!text.trim()) {
+      return Err(new ValidationError(`"${fileName}" is a PDF but no extractable text was found (it may be scanned/image-only)`));
+    }
+    return Ok(text);
+  } catch (err) {
+    return Err(new ValidationError(`Failed to parse PDF "${fileName}": ${err instanceof Error ? err.message : String(err)}`));
+  }
 }
 
 interface UploadMeta {
@@ -44,12 +67,16 @@ export class DocumentService {
     return this.store.list().find(d => (d.contentHash ?? computeContentHash(d.content)) === contentHash);
   }
 
-  upload(file: UploadedFile | undefined, meta: UploadMeta): Result<TechDocument, ValidationError> {
+  async upload(file: UploadedFile | undefined, meta: UploadMeta): Promise<Result<TechDocument, ValidationError>> {
     if (!file) {
       return Err(new ValidationError('No file provided in request'));
     }
 
-    const fileContent = file.buffer.toString('utf-8');
+    const extracted = await extractFileContent(file.buffer, file.originalname);
+    if (!extracted.ok) {
+      return extracted;
+    }
+    const fileContent = extracted.value;
     const contentHash = computeContentHash(fileContent);
 
     const existing = this.findDuplicateByContent(contentHash);

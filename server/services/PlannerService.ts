@@ -2,8 +2,9 @@ import { Type } from '@google/genai';
 import type { AgentNode, InstructionStep, MCPLogEntry } from '../../client/types';
 import { PlanningError } from '../errors/AppError';
 import { Err, Ok, type Result } from '../result';
-import type { LLMProvider } from '../llm/LLMProvider';
+import type { LLMProvider, StandbyEvent } from '../llm/LLMProvider';
 import { getDefaultAgents } from '../orchestration/AgentRoster';
+import { buildInstructionSteps } from '../orchestration/instructionStepFactory';
 import { loadPrompt, renderPrompt } from '../prompts/PromptRenderer';
 import type { DocumentService } from './DocumentService';
 
@@ -33,7 +34,7 @@ export class PlannerService {
     private readonly documentService: DocumentService
   ) {}
 
-  async plan(input: PlanInput): Promise<Result<PlanOutput, PlanningError>> {
+  async plan(input: PlanInput, onStandby?: (event: StandbyEvent) => void): Promise<Result<PlanOutput, PlanningError>> {
     const { userPrompt, docIds, activeAgentIds } = input;
 
     const allSpecialists = getDefaultAgents();
@@ -64,6 +65,7 @@ export class PlannerService {
     });
 
     const result = await this.llmProvider.generate(systemPrompt, {
+      onStandby,
       responseSchema: {
         type: Type.OBJECT,
         properties: {
@@ -101,20 +103,11 @@ export class PlannerService {
 
       // The model is instructed to only use availableAgentIds, but guard against
       // it hallucinating a deselected agent so the UI never references a missing node.
-      const fallbackAgentId = availableAgentIds[0];
-      const formattedInstructionSet: InstructionStep[] = planData.instructionSet.map((step: any, idx: number) => {
-        const assignedAgentId = availableAgentIds.includes(step.assignedAgentId) ? step.assignedAgentId : fallbackAgentId;
-        return {
-          id: `step_${idx + 1}_${Date.now()}`,
-          stepNumber: idx + 1,
-          assignedAgentId,
-          agentName: assignedAgentId === step.assignedAgentId ? (step.agentName || assignedAgentId.toUpperCase()) : allSpecialists[assignedAgentId].name,
-          title: step.title,
-          instruction: step.instruction,
-          requiredTools: step.requiredTools || ['mcp_doc_search'],
-          status: 'pending'
-        };
-      });
+      const formattedInstructionSet: InstructionStep[] = buildInstructionSteps(
+        planData.instructionSet,
+        availableAgentIds,
+        allSpecialists
+      );
 
       const initialAgents: Record<string, AgentNode> = {
         lead: allSpecialists.lead,

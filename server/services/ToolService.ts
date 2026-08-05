@@ -2,16 +2,23 @@ import type { FunctionDeclaration } from '@google/genai';
 import type { MCPTool } from '../../client/types';
 import type { ToolError, ValidationError } from '../errors/AppError';
 import { noopLogger, withTiming, type LoggerLike } from '../observability/logger';
-import type { Result } from '../result';
+import { Ok, type Result } from '../result';
 import type { LLMProvider } from '../llm/LLMProvider';
 import type { SearchIndexService } from '../search/SearchIndexService';
 import type { ToolExecutor, ToolRegistry } from '../tools';
+import type { RecordCitationInput } from '../tools/types';
 import type { DocumentService } from './DocumentService';
+import type { MemoryService } from './MemoryService';
+
+interface CachedToolPayload {
+  readonly result: unknown;
+  readonly citations: RecordCitationInput[];
+}
 
 const DISPLAY_TOOLS: MCPTool[] = [
   {
     name: 'mcp_doc_search',
-    description: 'Queries uploaded technical documents, pipeline specs, and architecture sheets via semantic/keyword retrieval.',
+    description: 'Queries the user\'s uploaded documents via hybrid semantic/keyword retrieval, whatever their subject matter.',
     category: 'Document Storage',
     callCount: 24,
     status: 'idle',
@@ -22,7 +29,7 @@ const DISPLAY_TOOLS: MCPTool[] = [
   },
   {
     name: 'mcp_web_grounding',
-    description: 'Searches the web via Google Search Grounding for current arXiv papers, SOTA benchmarks, and library docs.',
+    description: 'Searches the live web via Google Search Grounding for current sources, reporting, research, and documentation on any topic.',
     category: 'Web Intelligence',
     callCount: 18,
     status: 'idle',
@@ -74,6 +81,50 @@ const DISPLAY_TOOLS: MCPTool[] = [
       inputs: ['markdown: string', 'title?: string'],
       output: 'PDF binary document with rendered diagrams and print-ready layout'
     }
+  },
+  {
+    name: 'mcp_document_pdf_converter',
+    description: 'Standalone PDF conversion for any markdown document: renders LaTeX math via KaTeX and converts plain-text/ASCII diagram blocks to real SVG via one LLM call per diagram. Independent of the research pipeline.',
+    category: 'Report Engine',
+    callCount: 0,
+    status: 'idle',
+    schema: {
+      inputs: ['markdown: string', 'title?: string', 'renderDiagramsWithLlm?: boolean'],
+      output: 'PDF binary document with rendered math, mermaid diagrams, and LLM-converted SVG diagrams'
+    }
+  },
+  {
+    name: 'mcp_html_report_exporter',
+    description: 'Converts a finished markdown report into a self-contained standalone HTML document (math, mermaid, and diagrams inlined) - viewable offline with no server round-trip.',
+    category: 'Report Engine',
+    callCount: 0,
+    status: 'idle',
+    schema: {
+      inputs: ['markdown: string', 'title?: string', 'renderDiagramsWithLlm?: boolean'],
+      output: 'Self-contained standalone HTML document'
+    }
+  },
+  {
+    name: 'mcp_docx_report_generator',
+    description: 'Converts a finished markdown report into an editable DOCX document (headings, prose, lists, tables, blockquotes) for hand-editing in Word or Google Docs.',
+    category: 'Report Engine',
+    callCount: 0,
+    status: 'idle',
+    schema: {
+      inputs: ['markdown: string', 'title?: string'],
+      output: 'DOCX binary document'
+    }
+  },
+  {
+    name: 'mcp_presentation_outline_generator',
+    description: 'Converts a finished markdown report into a presentation outline (PPTX) - a title slide plus one content slide per top-level section, with prose and lists flattened into bullets.',
+    category: 'Report Engine',
+    callCount: 0,
+    status: 'idle',
+    schema: {
+      inputs: ['markdown: string', 'title?: string'],
+      output: 'PPTX binary presentation outline'
+    }
   }
 ];
 
@@ -86,7 +137,8 @@ export class ToolService {
     private readonly documentService: DocumentService,
     private readonly llmProvider: LLMProvider,
     private readonly logger: LoggerLike = noopLogger,
-    private readonly searchIndexService?: SearchIndexService
+    private readonly searchIndexService?: SearchIndexService,
+    private readonly memoryService?: MemoryService
   ) {}
 
   listDisplayTools(): readonly MCPTool[] {
@@ -101,15 +153,45 @@ export class ToolService {
     return this.registry.toFunctionDeclarations(names);
   }
 
-  /** Pure execution with no display-metadata side effects; used by the research pipeline. */
-  async run(toolName: string, args: unknown): Promise<Result<unknown, ToolError | ValidationError>> {
-    return withTiming(this.logger, { event: 'tool_execute', tool: toolName }, () =>
+  /** Pure execution with no display-metadata side effects; used by the research pipeline. A
+   *  cacheable tool's result (and any citations it recorded) is memoized via MemoryService so an
+   *  identical call later in the same reflection loop doesn't repeat the real work - citations are
+   *  replayed on a cache hit so the citation graph stays correct even without re-executing. */
+  async run(
+    toolName: string,
+    args: unknown,
+    recordCitation?: (record: RecordCitationInput) => void
+  ): Promise<Result<unknown, ToolError | ValidationError>> {
+    const tool = this.registry.get(toolName);
+    const cacheable = Boolean(this.memoryService) && tool?.cacheable !== false;
+
+    if (cacheable) {
+      const cached = this.memoryService!.getCachedToolResult(toolName, args) as CachedToolPayload | undefined;
+      if (cached) {
+        this.logger.log({ level: 'info', event: 'tool_cache_hit', tool: toolName });
+        cached.citations.forEach(record => recordCitation?.(record));
+        return Ok(cached.result);
+      }
+    }
+
+    const capturedCitations: RecordCitationInput[] = [];
+    const result = await withTiming(this.logger, { event: 'tool_execute', tool: toolName }, () =>
       this.executor.run(toolName, args, {
         documents: this.documentService.list(),
         llmProvider: this.llmProvider,
-        searchIndexService: this.searchIndexService
+        searchIndexService: this.searchIndexService,
+        recordCitation: record => {
+          capturedCitations.push(record);
+          recordCitation?.(record);
+        }
       })
     );
+
+    if (result.ok && cacheable) {
+      this.memoryService!.setCachedToolResult(toolName, args, { result: result.value, citations: capturedCitations });
+    }
+
+    return result;
   }
 
   /** Execution that also tracks the display metadata (callCount/status) shown by GET /api/mcp/tools. */

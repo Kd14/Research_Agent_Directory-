@@ -42,7 +42,10 @@ export class SessionService {
       agents: {},
       logs: [],
       agentOutputs: {},
-      currentStepIndex: 0
+      currentStepIndex: 0,
+      citations: [],
+      reflections: [],
+      reflectionIterationCount: 0
     };
     this.store.create(id, metadata, history);
     return metadata;
